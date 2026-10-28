@@ -1,0 +1,10 @@
+{
+  "ENABLE_BOLA_BUG": true,
+  "ENABLE_RACE_CONDITION": true,
+  "ENABLE_MCC_POLLUTION_BUG": true,
+  "ENABLE_SIM_SWAP_BUG": true,
+  "ALLOW_RESET": true,
+  "DATABASE_URL": "sqlite:///./finshield.db",
+  "JWT_SECRET": "finshield-lab-dev-secret-do-not-use-in-production",
+  "JWT_TTL_MINUTES": 60
+}

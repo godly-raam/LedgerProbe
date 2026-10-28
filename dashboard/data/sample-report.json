@@ -1,0 +1,568 @@
+{
+  "schema_version": "1.0",
+  "run": {
+    "id": "FSR-20261028-183812",
+    "target": "http://127.0.0.1:8000",
+    "started_at": "2026-10-28T18:38:12.557971+00:00",
+    "finished_at": "2026-10-28T18:38:13.868983+00:00",
+    "duration_ms": 1311,
+    "score": 34,
+    "grade": "F",
+    "checks_total": 10,
+    "checks_passed": 3,
+    "checks_failed": 7
+  },
+  "summary": {
+    "findings": 6,
+    "by_severity": {
+      "critical": 0,
+      "high": 3,
+      "medium": 3,
+      "low": 0
+    },
+    "by_owasp": [
+      {
+        "id": "API1:2023",
+        "name": "Broken Object Level Authorization",
+        "count": 4
+      },
+      {
+        "id": "API6:2023",
+        "name": "Unrestricted Access to Sensitive Business Flows",
+        "count": 2
+      }
+    ],
+    "endpoints": [
+      {
+        "endpoint": "POST /api/v1/wallet/pay",
+        "findings": 2,
+        "max_cvss": 8.1,
+        "worst_severity": "high",
+        "owasp": [
+          "API6:2023"
+        ]
+      },
+      {
+        "endpoint": "POST /api/v1/family/allowance",
+        "findings": 1,
+        "max_cvss": 7.1,
+        "worst_severity": "high",
+        "owasp": [
+          "API1:2023"
+        ]
+      },
+      {
+        "endpoint": "GET /api/v1/device/{teen_id}",
+        "findings": 1,
+        "max_cvss": 6.5,
+        "worst_severity": "medium",
+        "owasp": [
+          "API1:2023"
+        ]
+      },
+      {
+        "endpoint": "GET /api/v1/family/allowance/{teen_id}",
+        "findings": 1,
+        "max_cvss": 6.5,
+        "worst_severity": "medium",
+        "owasp": [
+          "API1:2023"
+        ]
+      },
+      {
+        "endpoint": "GET /api/v1/wallet/transactions/{teen_id}",
+        "findings": 1,
+        "max_cvss": 6.5,
+        "worst_severity": "medium",
+        "owasp": [
+          "API1:2023"
+        ]
+      }
+    ]
+  },
+  "findings": [
+    {
+      "check_id": "RACE-LIMIT-BYPASS",
+      "title": "Concurrent payments bypass daily limit and lose balance updates",
+      "suite": "race",
+      "severity": "high",
+      "cvss": {
+        "score": 8.1,
+        "vector": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:N/I:H/A:H"
+      },
+      "owasp": {
+        "id": "API6:2023",
+        "name": "Unrestricted Access to Sensitive Business Flows"
+      },
+      "cwe": "CWE-362",
+      "endpoint": "POST /api/v1/wallet/pay",
+      "description": "Balance and spend-limit checks are separated from their writes by an await, so simultaneous payments all observe the same stale state and overwrite each other's deductions.",
+      "impact": "A teen can approve more payments than the daily allowance allows, spend the balance multiple times, and move the ledger out of sync with the wallet.",
+      "evidence": {
+        "request": {
+          "method": "POST",
+          "path": "/api/v1/wallet/pay",
+          "headers": {
+            "content-type": "application/json",
+            "authorization": "Bearer <redacted>"
+          },
+          "body": {
+            "amount_cents": 3000,
+            "mcc": "5411",
+            "merchant": "RaceMart #1"
+          }
+        },
+        "response": {
+          "status": 200,
+          "body": {
+            "payment_id": 2,
+            "status": "approved",
+            "amount_cents": 3000,
+            "mcc": "5411",
+            "merchant": "RaceMart #1",
+            "balance_cents": 9000,
+            "daily_limit_cents": 5000,
+            "spent_today_cents": 3000
+          }
+        },
+        "duration_ms": 123.98,
+        "burst": {
+          "attempts": 12,
+          "amount_cents": 3000,
+          "daily_limit_cents": 5000,
+          "status_counts": {
+            "200": 12
+          },
+          "approved": 12,
+          "safe_max_approved": 1,
+          "approved_total_cents": 36000,
+          "starting_balance_cents": 12000,
+          "ending_balance_cents": 9000,
+          "ledger_delta_cents": 3000,
+          "balance_consistent": false,
+          "transactions_recorded": 12
+        },
+        "notes": "12/12 concurrent payments approved (safe maximum 1); wallet moved by 3000 cents for 36000 cents of approved volume."
+      },
+      "remediation": {
+        "summary": "Make each invariant a single conditional UPDATE in one transaction, or lock the wallet row (SELECT ... FOR UPDATE) before reading it.",
+        "language": "python",
+        "vulnerable": "balance = wallet.balance_cents\nif balance < amount:\n    raise HTTPException(402)\nawait asyncio.sleep(RACE_WINDOW)\nwallet.balance_cents = balance - amount\ndb.commit()",
+        "secure": "spend_ok = db.execute(\n    update(Allowance)\n    .where(Allowance.teen_id == teen.id)\n    .where(Allowance.spent_today_cents + amount <= Allowance.daily_limit_cents)\n    .values(spent_today_cents=Allowance.spent_today_cents + amount)\n)\nif spend_ok.rowcount != 1:\n    db.rollback()\n    raise HTTPException(403, \"daily limit exceeded\")\nbalance_ok = db.execute(\n    update(Wallet)\n    .where(Wallet.teen_id == teen.id, Wallet.balance_cents >= amount)\n    .values(balance_cents=Wallet.balance_cents - amount)\n)"
+      },
+      "id": "FS-001"
+    },
+    {
+      "check_id": "BOLA-ALLOWANCE-WRITE",
+      "title": "Cross-tenant allowance takeover (BOLA write)",
+      "suite": "bola",
+      "severity": "high",
+      "cvss": {
+        "score": 7.1,
+        "vector": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:L/I:H/A:N"
+      },
+      "owasp": {
+        "id": "API1:2023",
+        "name": "Broken Object Level Authorization"
+      },
+      "cwe": "CWE-639",
+      "endpoint": "POST /api/v1/family/allowance",
+      "description": "Parent A can rewrite another family's allowance and reassign it to their own parent id by calling the allowance endpoint with a foreign teen_id.",
+      "impact": "An attacker-controlled guardian can lift spending limits and merchant-category blocks for any teen, defeating the core control of the neobank.",
+      "evidence": {
+        "request": {
+          "method": "POST",
+          "path": "/api/v1/family/allowance",
+          "headers": {
+            "content-type": "application/json",
+            "authorization": "Bearer <redacted>"
+          },
+          "body": {
+            "teen_id": "usr_teen_b",
+            "daily_limit_cents": 999999,
+            "blocked_mccs": []
+          }
+        },
+        "response": {
+          "status": 200,
+          "body": {
+            "teen_id": "usr_teen_b",
+            "parent_id": "usr_parent_a",
+            "daily_limit_cents": 999999,
+            "blocked_mccs": [],
+            "spent_today_cents": 0
+          }
+        },
+        "duration_ms": 10.97,
+        "notes": "Parent A set Teen B's limit to 999999 cents and cleared the MCC blocklist."
+      },
+      "remediation": {
+        "summary": "Never trust teen_id from the request body. Resolve the teen through a query constrained by parent_id before mutating anything.",
+        "language": "python",
+        "vulnerable": "teen = _teen_or_404(db, payload.teen_id)\nallowance = db.get(Allowance, teen.id)\nallowance.daily_limit_cents = payload.daily_limit_cents\nallowance.blocked_mccs = json.dumps(payload.blocked_mccs)\ndb.commit()",
+        "secure": "teen = db.scalar(\n    select(User)\n    .where(User.id == payload.teen_id)\n    .where(User.parent_id == parent.id)\n    .where(User.role == \"teen\")\n)\nif teen is None:\n    raise HTTPException(404, \"teen not found in your family\")\nallowance.daily_limit_cents = payload.daily_limit_cents"
+      },
+      "id": "FS-002"
+    },
+    {
+      "check_id": "MCC-ARRAY-BYPASS",
+      "title": "Merchant category block bypass via MCC array smuggling",
+      "suite": "mcc",
+      "severity": "high",
+      "cvss": {
+        "score": 7.1,
+        "vector": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:L/I:H/A:N"
+      },
+      "owasp": {
+        "id": "API6:2023",
+        "name": "Unrestricted Access to Sensitive Business Flows"
+      },
+      "cwe": "CWE-863",
+      "endpoint": "POST /api/v1/wallet/pay",
+      "description": "The payment endpoint checks the first MCC in a supplied list but books the last one, so a blocked category can be disguised as an allowed one.",
+      "impact": "A teen can spend against a parent-blocked category (for example gambling, MCC 7995) while the authorization decision sees grocery (5411).",
+      "evidence": {
+        "request": {
+          "method": "POST",
+          "path": "/api/v1/wallet/pay",
+          "headers": {
+            "content-type": "application/json",
+            "authorization": "Bearer <redacted>"
+          },
+          "body": {
+            "amount_cents": 100,
+            "mcc": [
+              "5411",
+              "7995"
+            ],
+            "merchant": "Loop Hole"
+          }
+        },
+        "response": {
+          "status": 200,
+          "body": {
+            "payment_id": 2,
+            "status": "approved",
+            "amount_cents": 100,
+            "mcc": "7995",
+            "merchant": "Loop Hole",
+            "balance_cents": 11875,
+            "daily_limit_cents": 5000,
+            "spent_today_cents": 125
+          }
+        },
+        "duration_ms": 115.27,
+        "notes": "Policy evaluated mcc[0]=5411 (grocery) but booked mcc[-1]=7995 (gambling)."
+      },
+      "remediation": {
+        "summary": "Reject list values for a scalar field, normalize once, and authorize the exact MCC that will be persisted.",
+        "language": "python",
+        "vulnerable": "if isinstance(payload.mcc, list):\n    check_mcc = payload.mcc[0]\n    booked_mcc = payload.mcc[-1]\nif check_mcc in blocked:\n    raise HTTPException(403)\npayment = Payment(mcc=booked_mcc, ...)",
+        "secure": "mcc = payload.mcc.strip()\nif mcc not in KNOWN_MCCS:\n    raise HTTPException(422, \"unknown mcc\")\nif mcc in blocked_categories(allowance):\n    raise HTTPException(403, \"merchant category blocked\")\npayment = Payment(mcc=mcc, ...)"
+      },
+      "id": "FS-003"
+    },
+    {
+      "check_id": "BOLA-ALLOWANCE-READ",
+      "title": "Cross-tenant allowance disclosure (BOLA)",
+      "suite": "bola",
+      "severity": "medium",
+      "cvss": {
+        "score": 6.5,
+        "vector": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:N/A:N"
+      },
+      "owasp": {
+        "id": "API1:2023",
+        "name": "Broken Object Level Authorization"
+      },
+      "cwe": "CWE-639",
+      "endpoint": "GET /api/v1/family/allowance/{teen_id}",
+      "description": "Parent A can read the allowance configuration of a teen in another family by supplying that teen's identifier.",
+      "impact": "Discloses another household's spending limits and blocked merchant categories, enabling targeted policy-evasion attempts.",
+      "evidence": {
+        "request": {
+          "method": "GET",
+          "path": "/api/v1/family/allowance/usr_teen_b",
+          "headers": {
+            "content-type": "application/json",
+            "authorization": "Bearer <redacted>"
+          },
+          "body": null
+        },
+        "response": {
+          "status": 200,
+          "body": {
+            "teen_id": "usr_teen_b",
+            "parent_id": "usr_parent_b",
+            "daily_limit_cents": 20000,
+            "blocked_mccs": [
+              "7995",
+              "7800"
+            ],
+            "spent_today_cents": 0
+          }
+        },
+        "duration_ms": 3.72,
+        "notes": "Parent A read allowance owned by usr_teen_b (usr_parent_b)"
+      },
+      "remediation": {
+        "summary": "Scope the lookup by both resource id and authenticated parent id, and return 404 when the pair does not match.",
+        "language": "python",
+        "vulnerable": "teen = db.get(User, teen_id)\nallowance = db.get(Allowance, teen.id)\nreturn allowance  # authenticated parent never compared",
+        "secure": "teen = db.scalar(\n    select(User).where(\n        User.id == teen_id,\n        User.parent_id == parent.id,\n        User.role == \"teen\",\n    )\n)\nif teen is None:\n    raise HTTPException(404, \"teen not found in your family\")"
+      },
+      "id": "FS-004"
+    },
+    {
+      "check_id": "BOLA-DEVICE-READ",
+      "title": "Cross-tenant SIM-binding disclosure",
+      "suite": "bola",
+      "severity": "medium",
+      "cvss": {
+        "score": 6.5,
+        "vector": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:N/A:N"
+      },
+      "owasp": {
+        "id": "API1:2023",
+        "name": "Broken Object Level Authorization"
+      },
+      "cwe": "CWE-639",
+      "endpoint": "GET /api/v1/device/{teen_id}",
+      "description": "A parent can read the SIM serial and attestation profile bound to another family's teen device.",
+      "impact": "SIM serials and attestation strength are the exact inputs needed to social-engineer a carrier swap or forge a device assertion.",
+      "evidence": {
+        "request": {
+          "method": "GET",
+          "path": "/api/v1/device/usr_teen_b",
+          "headers": {
+            "content-type": "application/json",
+            "authorization": "Bearer <redacted>"
+          },
+          "body": null
+        },
+        "response": {
+          "status": 200,
+          "body": {
+            "teen_id": "usr_teen_b",
+            "sim_serial": "89014103211118510721",
+            "attestation": {
+              "provider": "strongbox",
+              "strongbox": true,
+              "key_attested": true,
+              "bound_at": "2026-10-28T18:38:12.776741"
+            },
+            "rebinds": 0
+          }
+        },
+        "duration_ms": 6.02,
+        "notes": "Response includes the SIM serial and attestation profile for Teen B."
+      },
+      "remediation": {
+        "summary": "Apply the same ownership predicate to device lookups and strip serial numbers from responses not needed by the client.",
+        "language": "python",
+        "vulnerable": "device = db.get(Device, teen_id)\nreturn _device_payload(device)  # no family scoping",
+        "secure": "teen = db.scalar(\n    select(User).where(User.id == teen_id, User.parent_id == parent.id)\n)\nif teen is None:\n    raise HTTPException(404, \"teen not found in your family\")\nreturn _device_payload(db.get(Device, teen.id))"
+      },
+      "id": "FS-005"
+    },
+    {
+      "check_id": "BOLA-TRANSACTIONS-READ",
+      "title": "Cross-tenant transaction history disclosure",
+      "suite": "bola",
+      "severity": "medium",
+      "cvss": {
+        "score": 6.5,
+        "vector": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:N/A:N"
+      },
+      "owasp": {
+        "id": "API1:2023",
+        "name": "Broken Object Level Authorization"
+      },
+      "cwe": "CWE-639",
+      "endpoint": "GET /api/v1/wallet/transactions/{teen_id}",
+      "description": "Parent A can list the payment history of another family's teen.",
+      "impact": "Exposes merchant names, amounts and MCCs of minors outside the authenticated household.",
+      "evidence": {
+        "request": {
+          "method": "GET",
+          "path": "/api/v1/wallet/transactions/usr_teen_b",
+          "headers": {
+            "content-type": "application/json",
+            "authorization": "Bearer <redacted>"
+          },
+          "body": null
+        },
+        "response": {
+          "status": 200,
+          "body": {
+            "teen_id": "usr_teen_b",
+            "count": 0,
+            "transactions": []
+          }
+        },
+        "duration_ms": 8.97,
+        "notes": "Parent A listed another household's transaction history."
+      },
+      "remediation": {
+        "summary": "Derive the teen id from the authenticated relationship instead of the path, or validate parent ownership first.",
+        "language": "python",
+        "vulnerable": "rows = db.scalars(\n    select(Payment).where(Payment.teen_id == path_teen_id)\n).all()\nreturn {\"transactions\": rows}",
+        "secure": "teen = db.scalar(\n    select(User).where(User.id == teen_id, User.parent_id == parent.id)\n)\nif teen is None:\n    raise HTTPException(404, \"teen not found in your family\")\nrows = db.scalars(\n    select(Payment).where(Payment.teen_id == teen.id)\n).all()"
+      },
+      "id": "FS-006"
+    }
+  ],
+  "graph": {
+    "nodes": [
+      {
+        "id": "parent_a",
+        "label": "Parent A",
+        "kind": "principal"
+      },
+      {
+        "id": "parent_b",
+        "label": "Parent B",
+        "kind": "principal"
+      },
+      {
+        "id": "teen_a",
+        "label": "Teen A",
+        "kind": "teen"
+      },
+      {
+        "id": "teen_b",
+        "label": "Teen B",
+        "kind": "teen"
+      },
+      {
+        "id": "allowance_a",
+        "label": "Teen A allowance",
+        "kind": "resource"
+      },
+      {
+        "id": "allowance_b",
+        "label": "Teen B allowance",
+        "kind": "resource"
+      },
+      {
+        "id": "device_b",
+        "label": "Teen B SIM binding",
+        "kind": "resource"
+      },
+      {
+        "id": "transactions_b",
+        "label": "Teen B transactions",
+        "kind": "resource"
+      }
+    ],
+    "edges": [
+      {
+        "id": "e-own-allowance",
+        "from": "parent_a",
+        "to": "allowance_a",
+        "action": "read",
+        "allowed": true,
+        "check_id": null,
+        "finding_id": null
+      },
+      {
+        "id": "e-read-allowance-b",
+        "from": "parent_a",
+        "to": "allowance_b",
+        "action": "read",
+        "allowed": true,
+        "check_id": "BOLA-ALLOWANCE-READ",
+        "finding_id": "FS-004"
+      },
+      {
+        "id": "e-write-allowance-b",
+        "from": "parent_a",
+        "to": "allowance_b",
+        "action": "write",
+        "allowed": true,
+        "check_id": "BOLA-ALLOWANCE-WRITE",
+        "finding_id": "FS-002"
+      },
+      {
+        "id": "e-read-device-b",
+        "from": "parent_a",
+        "to": "device_b",
+        "action": "read",
+        "allowed": true,
+        "check_id": "BOLA-DEVICE-READ",
+        "finding_id": "FS-005"
+      },
+      {
+        "id": "e-read-transactions-b",
+        "from": "parent_a",
+        "to": "transactions_b",
+        "action": "read",
+        "allowed": true,
+        "check_id": "BOLA-TRANSACTIONS-READ",
+        "finding_id": "FS-006"
+      }
+    ]
+  },
+  "checks": [
+    {
+      "name": "bola.control.parent_reads_own_teen",
+      "suite": "bola",
+      "passed": true,
+      "detail": "own allowance lookup returned 200"
+    },
+    {
+      "name": "bola.allowance.read",
+      "suite": "bola",
+      "passed": false,
+      "detail": "cross-family read returned 200"
+    },
+    {
+      "name": "bola.allowance.write",
+      "suite": "bola",
+      "passed": false,
+      "detail": "cross-family write returned 200"
+    },
+    {
+      "name": "bola.device.read",
+      "suite": "bola",
+      "passed": false,
+      "detail": "cross-family device read returned 200"
+    },
+    {
+      "name": "bola.transactions.read",
+      "suite": "bola",
+      "passed": false,
+      "detail": "cross-family transactions read returned 200"
+    },
+    {
+      "name": "mcc.blocked_direct",
+      "suite": "mcc",
+      "passed": true,
+      "detail": "blocked MCC payment returned 403"
+    },
+    {
+      "name": "mcc.allowed_control",
+      "suite": "mcc",
+      "passed": true,
+      "detail": "allowed grocery payment returned 200"
+    },
+    {
+      "name": "mcc.array_smuggling",
+      "suite": "mcc",
+      "passed": false,
+      "detail": "array-wrapped MCC payment returned 200"
+    },
+    {
+      "name": "race.daily_limit",
+      "suite": "race",
+      "passed": false,
+      "detail": "12 of 12 payments approved; limit allowed 1"
+    },
+    {
+      "name": "race.balance_integrity",
+      "suite": "race",
+      "passed": false,
+      "detail": "wallet debited 3000 cents for 36000 cents of approved payments"
+    }
+  ]
+}

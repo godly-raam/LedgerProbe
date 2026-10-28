@@ -1,0 +1,55 @@
+services:
+  mock-bank-api:
+    build: ./mock-bank-api
+    ports:
+      - "8000:8000"
+    environment:
+      FINSHIELD_CONFIG: /app/config.json
+    volumes:
+      - ./mock-bank-api/config.json:/app/config.json:ro
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+
+  dashboard:
+    build: ./dashboard
+    ports:
+      - "3001:3000"
+    environment:
+      REPORTS_DIR: /reports
+    volumes:
+      - ./logic-fuzzer/reports:/reports:ro
+    depends_on:
+      mock-bank-api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # On demand: docker compose --profile scan run --rm fuzzer
+  fuzzer:
+    build: ./logic-fuzzer
+    profiles: ["scan"]
+    environment:
+      FINSHIELD_TARGET: http://mock-bank-api:8000
+    volumes:
+      - ./logic-fuzzer/reports:/reports
+    command:
+      [
+        "python",
+        "main.py",
+        "--base-url",
+        "http://mock-bank-api:8000",
+        "--out",
+        "/reports",
+      ]
+    depends_on:
+      mock-bank-api:
+        condition: service_healthy

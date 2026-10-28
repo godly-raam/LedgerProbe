@@ -1,0 +1,63 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+body {
+  background:
+    radial-gradient(70rem 40rem at 12% -10%, rgba(20, 184, 166, 0.12), transparent 60%),
+    radial-gradient(60rem 40rem at 95% 0%, rgba(56, 189, 248, 0.08), transparent 55%),
+    #060a10;
+}
+
+.grid-backdrop {
+  background-image:
+    linear-gradient(to right, rgba(148, 163, 184, 0.055) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(148, 163, 184, 0.055) 1px, transparent 1px);
+  background-size: 64px 64px;
+  mask-image: radial-gradient(ellipse 80% 55% at 50% 0%, black 30%, transparent 100%);
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #243143;
+  border: 2px solid #060a10;
+  border-radius: 999px;
+}
+
+::selection {
+  background: rgba(45, 212, 191, 0.25);
+}
+
+@layer components {
+  .panel {
+    @apply rounded-2xl border border-white/10 bg-white/[0.025] shadow-xl shadow-black/20 backdrop-blur-sm;
+  }
+
+  .panel-link {
+    @apply transition-colors duration-150 hover:border-teal-300/30 hover:bg-white/[0.045];
+  }
+
+  .eyebrow {
+    @apply text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500;
+  }
+
+  .mono-label {
+    @apply font-mono text-[11px] uppercase tracking-[0.14em] text-slate-500;
+  }
+
+  .pill {
+    @apply inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium;
+  }
+
+  .code-block {
+    @apply overflow-x-auto whitespace-pre rounded-lg border border-white/5 bg-black/40 p-4 font-mono text-[12px] leading-5 text-slate-300;
+  }
+}

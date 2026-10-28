@@ -1,0 +1,2 @@
+# Device mode only. --simulate uses the Python standard library alone.
+frida>=16.5,<18.0

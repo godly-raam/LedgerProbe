@@ -1,0 +1,111 @@
+name: FinShield-Core CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  audit-and-build:
+    name: Audit, fuzz, and build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            mock-bank-api/requirements-dev.txt
+            logic-fuzzer/requirements.txt
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: dashboard/package-lock.json
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r mock-bank-api/requirements-dev.txt -r logic-fuzzer/requirements.txt
+
+      - name: Test API behavior
+        working-directory: mock-bank-api
+        run: python -m pytest -q
+
+      - name: Test mobile attestation scoring
+        working-directory: mobile-harness
+        run: python -m pytest -q
+
+      - name: Validate Compose configuration
+        run: docker compose -f docker-compose.yml config --quiet
+
+      - name: Fuzz the live mock bank
+        working-directory: mock-bank-api
+        run: |
+          set -euo pipefail
+          python -m uvicorn app.asgi:app --host 127.0.0.1 --port 8000 --log-level warning &
+          API_PID=$!
+          trap 'kill "$API_PID" 2>/dev/null || true' EXIT
+
+          ready=0
+          for _ in $(seq 1 40); do
+            if curl -fsS http://127.0.0.1:8000/health >/dev/null 2>&1; then
+              ready=1
+              break
+            fi
+            if ! kill -0 "$API_PID" 2>/dev/null; then
+              echo "API exited before becoming healthy" >&2
+              exit 1
+            fi
+            sleep 0.5
+          done
+          if [ "$ready" -ne 1 ]; then
+            echo "API did not become healthy" >&2
+            exit 1
+          fi
+
+          cd ../logic-fuzzer
+          python main.py --base-url http://127.0.0.1:8000 --out reports
+
+          python - <<'PY'
+          import glob
+          import json
+          import sys
+
+          paths = sorted(glob.glob("reports/report-*.json"))
+          if not paths:
+              sys.exit("fuzzer produced no report")
+
+          with open(paths[-1], encoding="utf-8") as handle:
+              report = json.load(handle)
+
+          check_ids = {finding["check_id"] for finding in report["findings"]}
+          expected = {"BOLA-ALLOWANCE-WRITE", "MCC-ARRAY-BYPASS", "RACE-LIMIT-BYPASS"}
+          missing = expected - check_ids
+          if missing:
+              sys.exit(f"fuzzer missed expected findings: {sorted(missing)}")
+
+          print(
+              f"{report['run']['id']}: score {report['run']['score']}, "
+              f"{report['summary']['findings']} findings, "
+              f"{report['run']['checks_passed']}/{report['run']['checks_total']} checks passed"
+          )
+          PY
+
+      - name: Build dashboard
+        working-directory: dashboard
+        run: |
+          npm ci
+          npm run build
