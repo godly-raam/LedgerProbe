@@ -1,5 +1,7 @@
 # FinShield-Core
 
+[![FinShield-Core CI](https://github.com/godly-raam/LedgerProbe/actions/workflows/ci.yml/badge.svg)](https://github.com/godly-raam/LedgerProbe/actions/workflows/ci.yml)
+
 **An automated authorization-logic, race-condition, and SIM-binding security harness for neobank architectures.**
 
 FinShield-Core is a self-contained lab. It ships an intentionally vulnerable parent–teen neobank API, a stateful fuzzer that proves the flaws with captured traffic, an Android attestation inspector, and a Next.js console that turns the JSON reports into an executive view, a permission graph, and side-by-side patches.

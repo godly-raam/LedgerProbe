@@ -139,3 +139,38 @@ jobs:
         run: |
           npm ci
           npm run build
+
+  corpus:
+    name: Authorization fixture corpus and metrics
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Run corpus test suite
+        run: python -m pytest tests/test_corpus.py -v
+
+      - name: Compute corpus metrics
+        run: python tests/corpus_metrics.py --output corpus_metrics.md
+
+      - name: Upload corpus metrics artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: corpus-metrics
+          path: corpus_metrics.md
