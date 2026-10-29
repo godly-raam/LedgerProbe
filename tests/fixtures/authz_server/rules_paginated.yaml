@@ -1,0 +1,28 @@
+id: authz-paginated-isolation
+name: Paginated Catalog Differential Audit
+severity: HIGH
+owasp_category: API1:2023
+cvss_score: 8.1
+target_endpoints:
+  - path: /api/v1/paginated/{id}
+    method: GET
+auth_contexts:
+  primary: owner
+  forbidden: other
+parameters:
+  path:
+    id: "{{catalog_id}}"
+acceptable_status:
+  - 401
+  - 403
+  - 404
+leak_detection:
+  canaries:
+    - "{{canary_value}}"
+  min_unique_leaf_values: 5
+  ignore_fields:
+    - detail
+controls:
+  nonexistent_object: true
+  unauthenticated: true
+confirm: 2

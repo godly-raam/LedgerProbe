@@ -1,0 +1,217 @@
+# Machine-readable registry of authorization behavior profiles and their exact expectations.
+
+bola_plain:
+  category: vulnerable
+  expected_verdict: FAIL
+  expected_reason: leak_detected
+  expected_note: null
+  rule_file: rules_objects.yaml
+  description: "Other user gets owner's object with 200"
+
+bola_partial:
+  category: vulnerable
+  expected_verdict: FAIL
+  expected_reason: leak_detected
+  expected_note: null
+  rule_file: rules_objects.yaml
+  description: "Other user gets a subset of owner fields (canary present)"
+
+bola_list_filter_missing:
+  category: vulnerable
+  expected_verdict: FAIL
+  expected_reason: leak_detected
+  expected_note: null
+  rule_file: rules_items.yaml
+  description: "List endpoint with ?owner_id= returns owner's items"
+
+bola_nested:
+  category: vulnerable
+  expected_verdict: FAIL
+  expected_reason: leak_detected
+  expected_note: null
+  rule_file: rules_objects.yaml
+  description: "Owner data under nested/array fields"
+
+bola_after_cache:
+  category: vulnerable
+  expected_verdict: FAIL
+  expected_reason: leak_detected
+  expected_note: null
+  rule_file: rules_objects.yaml
+  description: "Response cached per object id, served to any identity"
+
+deny_403:
+  category: safe
+  expected_verdict: PASS
+  expected_reason: null
+  expected_note: null
+  rule_file: rules_objects.yaml
+  description: "Forbidden request denied with 403"
+
+deny_404_hide:
+  category: safe
+  expected_verdict: PASS
+  expected_reason: null
+  expected_note: null
+  rule_file: rules_objects.yaml
+  description: "Forbidden request denied with 404 to hide resource existence"
+
+deny_401:
+  category: safe
+  expected_verdict: PASS
+  expected_reason: null
+  expected_note: null
+  rule_file: rules_objects.yaml
+  description: "Forbidden request denied with 401"
+
+soft_deny_200_error_envelope:
+  category: safe
+  expected_verdict: PASS
+  expected_reason: null
+  expected_note: soft_deny
+  rule_file: rules_objects.yaml
+  description: "Soft deny returning 200 with error envelope matching negative control"
+
+soft_deny_200_empty_object:
+  category: safe
+  expected_verdict: PASS
+  expected_reason: null
+  expected_note: soft_deny
+  rule_file: rules_objects.yaml
+  description: "Soft deny returning 200 with empty JSON object {}"
+
+soft_deny_200_empty_list:
+  category: safe
+  expected_verdict: PASS
+  expected_reason: null
+  expected_note: soft_deny
+  rule_file: rules_items.yaml
+  description: "Soft deny returning 200 with empty JSON list []"
+
+public_endpoint:
+  category: safe
+  expected_verdict: PASS
+  expected_reason: null
+  expected_note: public_endpoint
+  rule_file: rules_objects.yaml
+  description: "Public endpoint where unauthenticated callers receive same data"
+
+shared_static_fields_only:
+  category: safe
+  expected_verdict: PASS
+  expected_reason: null
+  expected_note: soft_deny
+  rule_file: rules_objects.yaml
+  description: "200 response containing only non-owner-specific shared static data"
+
+bola_plain_fixed:
+  category: safe
+  expected_verdict: PASS
+  expected_reason: null
+  expected_note: null
+  rule_file: rules_objects.yaml
+  description: "Fixed variant of bola_plain returning 403"
+
+bola_partial_fixed:
+  category: safe
+  expected_verdict: PASS
+  expected_reason: null
+  expected_note: null
+  rule_file: rules_objects.yaml
+  description: "Fixed variant of bola_partial returning 403"
+
+bola_list_filter_fixed:
+  category: safe
+  expected_verdict: PASS
+  expected_reason: null
+  expected_note: soft_deny
+  rule_file: rules_items.yaml
+  description: "Fixed variant of bola_list_filter_missing returning empty list"
+
+bola_nested_fixed:
+  category: safe
+  expected_verdict: PASS
+  expected_reason: null
+  expected_note: null
+  rule_file: rules_objects.yaml
+  description: "Fixed variant of bola_nested returning 403"
+
+bola_after_cache_fixed:
+  category: safe
+  expected_verdict: PASS
+  expected_reason: null
+  expected_note: null
+  rule_file: rules_objects.yaml
+  description: "Fixed variant of bola_after_cache with tenant-isolated caching"
+
+flaky_500:
+  category: tricky
+  expected_verdict: INCONCLUSIVE
+  expected_reason: server_error
+  expected_note: null
+  rule_file: rules_objects.yaml
+  description: "Flaky server returning 500 error on every 3rd request"
+
+rate_limit_429:
+  category: tricky
+  expected_verdict: INCONCLUSIVE
+  expected_reason: rate_limited
+  expected_note: null
+  rule_file: rules_objects.yaml
+  description: "Rate limited endpoint returning 429 with Retry-After header"
+
+slow_timeout:
+  category: tricky
+  expected_verdict: INCONCLUSIVE
+  expected_reason: timeout
+  expected_note: null
+  rule_file: rules_objects.yaml
+  description: "Slow server timing out during forbidden verification"
+
+nondeterministic_leak:
+  category: tricky
+  expected_verdict: INCONCLUSIVE
+  expected_reason: not_reproducible
+  expected_note: null
+  rule_file: rules_objects.yaml
+  description: "Flaky leak that succeeds on 1st request but fails confirmation"
+
+generic_200_same_for_all:
+  category: tricky
+  expected_verdict: PASS
+  expected_reason: null
+  expected_note: public_endpoint
+  rule_file: rules_objects.yaml
+  description: "200 with identical generic body for any id and any identity"
+
+nonexistent_id_returns_200_owner_like:
+  category: tricky
+  expected_verdict: PASS
+  expected_reason: null
+  expected_note: soft_deny
+  rule_file: rules_objects.yaml
+  description: "Control ID collides or is not provably absent"
+
+redirect_302:
+  category: tricky
+  expected_verdict: INCONCLUSIVE
+  expected_reason: unexpected_status
+  expected_note: null
+  rule_file: rules_objects.yaml
+  description: "Redirect 302 to login endpoint"
+
+html_login_200:
+  category: tricky
+  expected_verdict: INCONCLUSIVE
+  expected_reason: ambiguous_2xx
+  expected_note: null
+  rule_file: rules_objects.yaml
+  description: "200 with HTML login page instead of JSON"
+
+paginated_list_page_2:
+  category: tricky
+  expected_verdict: INCONCLUSIVE
+  expected_reason: ambiguous_2xx
+  expected_note: null
+  rule_file: rules_paginated.yaml
+  description: "Paginated list where owner item is on page 2"

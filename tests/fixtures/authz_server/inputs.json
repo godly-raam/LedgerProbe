@@ -1,0 +1,18 @@
+{
+  "contexts": {
+    "owner": {
+      "Authorization": "Bearer token-owner",
+      "X-Actor": "owner"
+    },
+    "other": {
+      "Authorization": "Bearer token-other",
+      "X-Actor": "other"
+    }
+  },
+  "variables": {
+    "id": "obj-owner-1",
+    "owner_id": "user_owner",
+    "catalog_id": "catalog-1",
+    "canary_value": "canary-secret-owner-9988"
+  }
+}
