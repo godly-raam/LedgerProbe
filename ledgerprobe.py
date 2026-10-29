@@ -55,6 +55,8 @@ def arguments(argv=None) -> argparse.Namespace:
     parser.add_argument("--concurrency", type=positive_int, default=4)
     parser.add_argument("--timeout", type=positive_float, default=15.0)
     parser.add_argument("--read-only", action="store_true", help="block all methods except GET/HEAD/OPTIONS")
+    parser.add_argument("--fail-on-inconclusive", action="store_true",
+                        help="return exit 1 when executed checks are inconclusive")
     parser.add_argument("--allow-mutation", action="append", type=mutation, default=[], metavar="METHOD:/path")
     return parser.parse_args(argv)
 
@@ -121,10 +123,13 @@ async def execute(args: argparse.Namespace) -> int:
         # Outbound notifications are explicitly opted-in writes, not target mutations.
         async with GuardedClient(max_rps=args.max_rps, concurrency=1, timeout=args.timeout) as client:
             await notify(results, webhooks, client)
-    # An incomplete scan must never turn a CI job green.
-    if counts["error"] or not counts["passed"] + counts["failed"]:
+    # Errors mean the scan could not be trusted. Inconclusive checks completed
+    # safely but do not establish an authorization verdict unless opted into CI failure.
+    if counts["error"] or not counts["passed"] + counts["failed"] + counts["inconclusive"]:
         return 2
-    return 1 if counts["failed"] else 0
+    if counts["failed"] or (args.fail_on_inconclusive and counts["inconclusive"]):
+        return 1
+    return 0
 
 
 def main(argv=None) -> int:

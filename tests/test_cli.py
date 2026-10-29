@@ -111,3 +111,37 @@ def test_errors_do_not_print_secret_configuration(tmp_path, capsys):
     rules.write_text(json.dumps(RULE))
     assert ledgerprobe.main(["--spec", "missing", "--rules", str(rules), "--inputs", str(inputs)]) == 2
     assert "sensitive" not in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("strict,exit_code", [(False, 0), (True, 1)])
+def test_inconclusive_exit_policy_and_report_mapping(tmp_path, strict, exit_code):
+    selected = {key: value for key, value in RULE.items() if key != "assertions"}
+    selected["leak_detection"] = {}
+    def handler(request):
+        if request.headers.get("X-Actor") == "owner":
+            return httpx.Response(200, json={"id": "object-a", "label": "owner-marker"})
+        if request.headers.get("X-Actor") == "other":
+            if request.url.path != "/objects/object-a":
+                return httpx.Response(404, json={"error": "absent"})
+            return httpx.Response(200, json={"result": "generic"})
+        return httpx.Response(401)
+    inputs = {"contexts": {"owner": {"X-Actor": "owner"}, "other": {"X-Actor": "other"}},
+              "variables": {"id": "object-a"}}
+    code, sarif, junit = scan(tmp_path, handler, rule=selected, inputs=inputs,
+                              extra=("--fail-on-inconclusive",) if strict else ())
+    assert code == exit_code
+    assert junit.getroot().get("skipped") == "1"
+    assert not junit.findall(".//failure")
+    assert len(junit.findall(".//skipped")) == 1
+    note = sarif["runs"][0]["results"][0]
+    assert note["level"] == "note" and note["kind"] == "review"
+    assert note["properties"]["reason"] == "ambiguous_2xx"
+    assert "security-severity" not in json.dumps(sarif)
+    assert "object-a" not in json.dumps(sarif)
+
+
+def test_errors_keep_exit_two_even_with_fail_on_inconclusive(tmp_path):
+    selected = {key: value for key, value in RULE.items() if key != "assertions"}
+    selected["leak_detection"] = {}
+    assert scan(tmp_path, lambda request: httpx.Response(500), rule=selected,
+                extra=("--fail-on-inconclusive",))[0] == 2

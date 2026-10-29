@@ -45,6 +45,9 @@ jobs:
       - name: Test LedgerProbe engine
         run: python -m pytest tests -q --junitxml=.demo/engine-tests.xml
 
+      - name: Verify differential BOLA verdicts with bug enabled and disabled
+        run: python -m pytest tests/test_lab_differential.py -q
+
       - name: Test API behavior
         working-directory: mock-bank-api
         run: python -m pytest -q
