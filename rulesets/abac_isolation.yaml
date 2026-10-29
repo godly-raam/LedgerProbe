@@ -1,3 +1,4 @@
+# Differential, read-only tenant-isolation policy. See pkg/rules/README.md.
 id: bola-cross-tenant-access
 name: Broken Object Level Authorization Audit
 severity: HIGH
@@ -12,6 +13,16 @@ auth_contexts:
 parameters:
   path:
     teen_id: "{{teen_id}}"
-assertions:
-  - type: status_code
-    expected: 403
+acceptable_status:
+  - 403
+  - 404
+leak_detection:
+  canaries:
+    - "{{teen_id}}"
+  min_unique_leaf_values: 1
+  ignore_fields:
+    - detail
+controls:
+  nonexistent_object: true
+  unauthenticated: true
+confirm: 2

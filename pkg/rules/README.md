@@ -179,3 +179,118 @@ context, baseline, transport and other execution problems are `error`, never
 vulnerability findings. Results contain no expanded URLs, request headers,
 input values, exception text or response bodies. Rules' own metadata is returned
 unchanged, so do not place secrets in metadata.
+
+## Differential ABAC isolation extension
+
+The rules above are the **legacy assertion schema**. A status-only rule remains
+an exact status contract: `assertions: [{type: status_code, expected: 403}]`
+accepts only `403` after its optional primary baseline. It neither accepts
+hide-existence `404` responses nor establishes owner-specific leak evidence.
+
+A differential ABAC rule is selected by `leak_detection`. It is a separate,
+strict schema: a legacy rule requires nonempty `assertions`; a differential
+rule has no `assertions`. The usual metadata, target, context, and parameter
+rules still apply. Unknown fields are rejected, and there is no automatic
+migration between the two schemas.
+
+```yaml
+# Complete differential shape used by rulesets/abac_isolation.yaml.
+leak_detection:
+  canaries: ["{{teen_id}}"]
+  min_unique_leaf_values: 1
+  ignore_fields: [detail]
+controls:
+  nonexistent_object: true
+  unauthenticated: true
+confirm: 2
+```
+
+### Strict fields and defaults
+
+| Field | Required / type | Exact meaning |
+| --- | --- | --- |
+| `acceptable_status` | Optional nonempty list of unique integer `400..499` statuses, excluding `429`. Default: `[401, 403, 404]`. | An initial forbidden response in this deny set is **PASS**, without control or confirmation requests. `404` is a valid hide-existence pattern. Overload/success statuses cannot be configured as denials. |
+| `leak_detection` | Mapping; its presence opts into differential evaluation. | May contain only `canaries`, `min_unique_leaf_values`, and `ignore_fields`. Cannot be combined with legacy `assertions`. Other differential fields without this block are rejected. |
+| `leak_detection.canaries` | Optional list of unique nonempty strings/templates. Default: `[]`. | Templates resolve from input `variables` using normal placeholder resolution and may yield any scalar JSON value, never an object/array. These are comparison **values**, not response-field paths. Supply values known to occur only in the owner's object. A canary counts only if found in the baseline, not ignored, and absent from the nonexistent response. |
+| `leak_detection.min_unique_leaf_values` | Optional positive integer. Default: `2`. | Minimum distinct scalar values shared by primary and forbidden JSON responses **after subtracting** every value also seen in the nonexistent response. Repeated leaves count once; boolean/number types remain distinct. Any single qualifying canary independently satisfies the leak criterion. |
+| `leak_detection.ignore_fields` | Optional list of unique nonempty dot paths. Default: `[]`. | Excludes matching subtrees from **all** comparisons, including overlap, canaries, public equality, and soft-deny shape. Paths use object keys and zero-based array indexes, e.g. `metadata.request_id`, `rows.0.timestamp`. No wildcard/JSONPath syntax. |
+| `controls` | Optional mapping containing only booleans `nonexistent_object` and `unauthenticated`. | When `leak_detection` is present, both controls default to `true`; omitted keys also default to `true`. |
+| `confirm` | Optional integer in `[0, 100]` (booleans rejected). Default: `2`. | Additional identical forbidden requests for a would-be FAIL only. Every repeat must reproduce stable owner-specific evidence. `0` disables repeats; the upper bound prevents accidental unbounded traffic. PASS and ambiguous outcomes are not repeated. |
+
+The runner resolves canaries before any selected-target HTTP. Both named
+`primary` and `forbidden` contexts are required and must have different names.
+A primary 2xx baseline is mandatory; non-2xx, baseline timeout, resolution,
+configuration, and non-timeout transport failures are ERROR, not findings.
+The comparison ignores shared/static values using the nonexistent control.
+If that control is unavailable/disabled/non-JSON, overlap alone is insufficient:
+only an explicit qualifying canary can establish a leak, at reduced confidence.
+
+### Controls, read-only operation, and confirmation
+
+Every baseline, dependency, forbidden, control, and confirmation request uses
+the same `GuardedClient`, rate bucket, cooldown, and read-only policy. Use
+`--read-only` for non-mutating scans: mutations are blocked unless their exact
+method/resolved path is allowlisted. Without it, differential policies may
+repeat mutations, so select only authorized test endpoints. A state-changing
+GET remains unsafe despite its method. Confirmations reuse exact original
+path/query/body inputs; neither forbidden nor control responses update state.
+
+| Control | Behavior |
+| --- | --- |
+| `nonexistent_object` | Replays the forbidden identity with a generated candidate ID. Supports one unambiguous path/query `id` or `*_id` parameter (otherwise a single path parameter), schema-declared UUID/string/integer types, bounds, and supported string patterns. Multiple IDs, unknown/unsupported types, enums, or unsatisfied constraints skip the control and reduce confidence. UUIDs/integers are randomized; string candidates preserve existing length/separators or known prefixes and are checked against the pattern. Candidates cannot be proven absent; values returned for them are treated as shared, preventing cached/static responses from proving BOLA. Non-JSON control bodies are not usable subtraction evidence. |
+| `unauthenticated` | Replays the original request with no context headers, `auth=None`, and an empty Cookie header to prevent cookie-jar reuse. An unauthenticated 2xx with identical JSON paths/typed values (after ignoring fields) yields PASS with note `public_endpoint`. This classifies public exposure, not whether public access itself is desirable. |
+
+A would-be FAIL requires `confirm` additional observations. Every repeat must
+retain a qualifying original canary or all original overlap values (with at
+least the configured minimum). Missing/changed evidence or denial on a repeat yields
+INCONCLUSIVE `not_reproducible`. A 429/5xx/timeout on a control or confirmation
+yields its specific inconclusive reason; repeats stop on overload/timeouts
+rather than hammering the target. GuardedClient still applies Retry-After.
+
+### Differential verdicts and reason codes
+
+Results retain lowercase `status` for compatibility. Differential results also
+carry uppercase `verdict`, `confidence` (`high` or `reduced`), and privacy-safe
+`evidence`. Every non-PASS, including legacy failures/errors and safety skips,
+has a machine-readable `reason`. PASS annotations use `note`, not `reason`.
+
+| Verdict | Reason code | Exact outcome |
+| --- | --- | --- |
+| `PASS` | — | Forbidden response is in `acceptable_status`; no body-leak analysis on an accepted denial. |
+| `PASS` | note: `public_endpoint` | Unauthenticated 2xx has identical JSON data to the forbidden response. |
+| `PASS` | note: `soft_deny` | Forbidden 2xx has the same JSON paths/types as the nonexistent response, without leak evidence (values may differ). |
+| `FAIL` | `leak_detected` | Forbidden 2xx has a unique owner canary or sufficient unique overlap, and all configured repeats reproduce stable evidence. |
+| `INCONCLUSIVE` | `rate_limited` | Forbidden/control/confirmation response is 429. |
+| `INCONCLUSIVE` | `server_error` | Forbidden/control/confirmation response is 5xx. |
+| `INCONCLUSIVE` | `timeout` | Forbidden/control/confirmation request times out. |
+| `INCONCLUSIVE` | `not_reproducible` | Candidate evidence does not reproduce on every required confirmation. |
+| `INCONCLUSIVE` | `ambiguous_2xx` | Successful response is neither public nor a soft deny and has insufficient unique leak evidence. |
+| `INCONCLUSIVE` | `unexpected_status` | Forbidden response is neither 2xx nor an accepted denial/overload status (e.g. redirect). |
+| `ERROR` | `baseline_not_2xx` / `baseline_timeout` | Primary baseline failed; no forbidden request is sent. |
+| `ERROR` | `execution_error` / `invalid_canary` | Resolution/context/transport problem, or canary resolves to a non-scalar. |
+| legacy `FAIL` | `assertion_failed` | Legacy assertions did not all match; no differential traffic is added. |
+| existing `SKIPPED` | `safety_blocked` / `endpoint_absent` | Guard blocked a request, or selected endpoint is absent. |
+
+A 429/5xx/timeout/non-reproducible candidate is never a vulnerability finding.
+INCONCLUSIVE exits **0** by default (even when every executed check is
+inconclusive); `--fail-on-inconclusive` makes it exit **1**. FAIL exits **1**;
+ERROR, configuration failure, or all-skipped scans exit **2**, taking priority.
+JUnit represents INCONCLUSIVE as skipped with a message/reason. SARIF emits a
+`level: note`, `kind: review` result without security-rule severity metadata,
+not a security alert. HIGH/CRITICAL webhooks still send only FAIL findings.
+
+### Evidence privacy and compatibility
+
+Differential evidence contains only counts, hashes, HTTP statuses, and boolean
+control/reproduction flags. It never contains raw canary values, resolved input
+values, request or response bodies, headers, URLs, exception text, or raw field
+paths. Hashes fingerprint JSON paths/types only, not scalar values or
+low-entropy object IDs. Reporters allowlist evidence fields before exporting
+SARIF/JUnit properties; raw observations remain local to verdict evaluation.
+
+`rulesets/legacy_status_only.yaml` preserves the original policy exactly: the
+same metadata, contexts, path input, target, and one `403` status assertion.
+Use it for the legacy assertion schema. `rulesets/abac_isolation.yaml` is the
+differential read-only example: it has no assertions, resolves `{{teen_id}}` as
+a scalar canary, and uses two confirmation repeats. A legacy-only runner must
+reject differential fields rather than silently downgrade the policy.

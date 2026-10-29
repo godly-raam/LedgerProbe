@@ -5,14 +5,18 @@ from __future__ import annotations
 import copy
 import math
 import re
+import secrets
+import uuid
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote, urlsplit
 
+import httpx
 import yaml
 
 from ..guardrails import UnsafeRequest
+from .verdict import evaluate_differential
 
 __all__ = ["load_rules", "run_rules"]
 
@@ -83,8 +87,16 @@ def _validate_rules(rules):
     ids = set()
     for rule in rules:
         _keys(rule, {"id", "name", "severity", "owasp_category", "cvss_score",
-                     "target_endpoints", "auth_contexts", "assertions", "parameters", "body"},
-              {"id", "name", "severity", "owasp_category", "cvss_score", "target_endpoints", "assertions"})
+                     "target_endpoints", "auth_contexts", "assertions", "parameters", "body",
+                     "acceptable_status", "leak_detection", "controls", "confirm"},
+              {"id", "name", "severity", "owasp_category", "cvss_score", "target_endpoints"})
+        differential = "leak_detection" in rule
+        if not differential and set(rule) & {"acceptable_status", "controls", "confirm"}:
+            raise ValueError("Differential fields require leak_detection")
+        if not differential and "assertions" not in rule:
+            raise ValueError("Legacy rules require assertions")
+        if differential and "assertions" in rule:
+            raise ValueError("Differential rules must not mix assertions with leak_detection")
         for name in ("id", "name", "owasp_category"):
             _text(rule[name])
         if rule["id"] in ids:
@@ -118,8 +130,8 @@ def _validate_rules(rules):
             raise ValueError("Duplicate rule parameter header")
         if "body" in rule:
             _json(rule["body"])
-        assertions = rule["assertions"]
-        if not isinstance(assertions, list) or not assertions:
+        assertions = rule.get("assertions", [])
+        if not differential and (not isinstance(assertions, list) or not assertions):
             raise ValueError("assertions must be a nonempty list")
         for assertion in assertions:
             if not isinstance(assertion, dict):
@@ -151,6 +163,35 @@ def _validate_rules(rules):
                 raise ValueError("Unknown assertion type")
             if "expected" in assertion:
                 _json(assertion["expected"])
+        if differential:
+            acceptable = rule.get("acceptable_status", [401, 403, 404])
+            if (not isinstance(acceptable, list) or not acceptable
+                    or any(type(status) is not int or not 400 <= status <= 499 or status == 429 for status in acceptable)
+                    or len(set(acceptable)) != len(acceptable)):
+                raise ValueError("acceptable_status must be a unique nonempty list of HTTP status integers")
+            leak = rule["leak_detection"]
+            _keys(leak, {"canaries", "min_unique_leaf_values", "ignore_fields"})
+            canaries = leak.get("canaries", [])
+            if (not isinstance(canaries, list) or any(not isinstance(value, str) or not value.strip() for value in canaries)
+                    or len(set(canaries)) != len(canaries)):
+                raise ValueError("leak_detection.canaries must be unique nonempty strings")
+            minimum = leak.get("min_unique_leaf_values", 2)
+            if type(minimum) is not int or minimum < 1:
+                raise ValueError("leak_detection.min_unique_leaf_values must be a positive integer")
+            ignore = leak.get("ignore_fields", [])
+            if (not isinstance(ignore, list) or any(not isinstance(value, str) or not value
+                                                   or not re.fullmatch(r"[\w-]+(?:\.[\w-]+)*", value) for value in ignore)
+                    or len(set(ignore)) != len(ignore)):
+                raise ValueError("leak_detection.ignore_fields must be unique string paths")
+            controls = rule.get("controls", {})
+            _keys(controls, {"nonexistent_object", "unauthenticated"})
+            if any(type(value) is not bool for value in controls.values()):
+                raise ValueError("controls values must be booleans")
+            confirm = rule.get("confirm", 2)
+            if type(confirm) is not int or not 0 <= confirm <= 100:
+                raise ValueError("confirm must be an integer between 0 and 100")
+            if set(auth) != {"primary", "forbidden"} or auth["primary"] == auth["forbidden"]:
+                raise ValueError("Differential rules require distinct primary and forbidden contexts")
 
 
 def load_rules(paths: Iterable[str]) -> list[dict[str, Any]]:
@@ -196,9 +237,10 @@ def _lookup(values, path) -> Any:
 
 
 class _Stop(Exception):
-    def __init__(self, message, status="error"):
+    def __init__(self, message, status="error", reason=None):
         self.message = message
         self.status = status
+        self.reason = reason
 
 
 def _expand(value, variables) -> Any:
@@ -289,7 +331,7 @@ class _Runtime:
             raise _Stop("Named authentication context is unavailable.")
         return dict(self.contexts[context])
 
-    async def request(self, endpoint, inputs, context):
+    async def request(self, endpoint, inputs, context, timeout_is_inconclusive=False):
         headers = dict(inputs["headers"])
         headers.update({key.lower(): value for key, value in self.headers(context).items()})
         # An explicit empty Cookie header disables HTTPX's shared response cookie jar.
@@ -304,9 +346,13 @@ class _Runtime:
         try:
             return await self.client.request(endpoint["method"], inputs["url"], **kwargs)
         except UnsafeRequest:
-            raise _Stop("Request blocked by the safety guard.", "skipped") from None
+            raise _Stop("Request blocked by the safety guard.", "skipped", "safety_blocked") from None
+        except httpx.TimeoutException:
+            if timeout_is_inconclusive:
+                raise _Stop("HTTP request timed out.", "inconclusive", "timeout") from None
+            raise _Stop("HTTP request timed out.", "error", "timeout") from None
         except Exception:
-            raise _Stop("HTTP request failed.") from None
+            raise _Stop("HTTP request failed.", "error", "execution_error") from None
 
     def remember(self, endpoint, response, context):
         if context is None or not 200 <= response.status_code < 300:
@@ -475,7 +521,8 @@ class _Runtime:
                 body = await self.body(media.get("schema", {}), body, endpoint, rule, context, stack, budget)
         return {"url": base + path, "query": values["query"],
                 "headers": {k.lower(): str(v) for k, v in values["header"].items()},
-                "required_headers": required_headers, "body": body}
+                "required_headers": required_headers, "body": body,
+                "path_values": copy.deepcopy(values["path"])}
 
 
 def _assertions(response, assertions, variables):
@@ -508,6 +555,146 @@ def _assertions(response, assertions, variables):
                 passed = passed and exists and _matches_type(value, assertion["value_type"])
         details.append({"index": index, "type": kind, "passed": bool(passed)})
     return details
+
+
+def _response_record(response):
+    result = {"status": response.status_code}
+    try:
+        body = response.json()
+        _json(body)
+    except (ValueError, TypeError, RecursionError):
+        return result
+    result["body"] = body
+    return result
+
+
+def _differential_config(rule, variables):
+    leak = rule["leak_detection"]
+    canaries = _expand(leak.get("canaries", []), variables)
+    if any(isinstance(value, (dict, list)) for value in canaries):
+        raise _Stop("Canary values must resolve to scalar JSON values.", reason="invalid_canary")
+    return {"acceptable_status": rule.get("acceptable_status", [401, 403, 404]),
+            "canaries": canaries, "min_unique_leaf_values": leak.get("min_unique_leaf_values", 2),
+            "ignore_fields": leak.get("ignore_fields", [])}
+
+
+def _nonexistent_value(schema, current):
+    """Generate a schema-compatible candidate, never claim it is known absent."""
+    if not isinstance(schema, dict) or "enum" in schema or "const" in schema:
+        return _MISSING
+    kind = schema.get("type")
+    if kind == "integer":
+        ceiling = 2**63 - 1 if schema.get("format") == "int64" else 2**31 - 1
+        low = max(0, math.ceil(schema.get("minimum", 0)))
+        high = min(ceiling, math.floor(schema.get("maximum", ceiling)))
+        if isinstance(schema.get("exclusiveMinimum"), bool):
+            low += int(schema["exclusiveMinimum"])
+        elif "exclusiveMinimum" in schema:
+            low = max(low, math.floor(schema["exclusiveMinimum"]) + 1)
+        if isinstance(schema.get("exclusiveMaximum"), bool):
+            high -= int(schema["exclusiveMaximum"])
+        elif "exclusiveMaximum" in schema:
+            high = min(high, math.ceil(schema["exclusiveMaximum"]) - 1)
+        if high <= low or "multipleOf" in schema:
+            return _MISSING
+        for _ in range(8):
+            candidate = low + secrets.randbelow(high - low + 1)
+            if str(candidate) != str(current):
+                return candidate
+        return _MISSING
+    if kind != "string":
+        return _MISSING
+    random_id = str(uuid.uuid4())
+    candidates = [random_id] if schema.get("format") == "uuid" else ["ledgerprobe-" + random_id, random_id.replace("-", "")]
+    # Preserve an existing ID's separators/prefix and length to cover common
+    # usr_*, numeric-string and fixed-width patterns without synthesizing regexes.
+    if isinstance(current, str) and schema.get("format") != "uuid":
+        for _ in range(8):
+            candidates.append("".join(str(secrets.randbelow(10)) if char.isdigit()
+                                      else secrets.choice("abcdefghijklmnopqrstuvwxyz") if char.islower()
+                                      else secrets.choice("ABCDEFGHIJKLMNOPQRSTUVWXYZ") if char.isupper()
+                                      else char for char in current))
+            if "_" in current:
+                prefix, _, tail = current.rpartition("_")
+                candidates.append(prefix + "_" + secrets.token_hex(max(1, len(tail)))[:len(tail)])
+    pattern = schema.get("pattern")
+    for candidate in candidates:
+        if (candidate == str(current) or not schema.get("minLength", 0) <= len(candidate) <= schema.get("maxLength", 4096)):
+            continue
+        if schema.get("format") not in (None, "uuid"):
+            continue
+        try:
+            if pattern is None or re.search(pattern, candidate):
+                return candidate
+        except re.error:
+            return _MISSING
+    return _MISSING
+
+
+def _nonexistent_inputs(endpoint, inputs, base_url):
+    parameters = [p for p in endpoint.get("parameters", []) if p.get("in") in {"path", "query"}
+                  and (p.get("name") == "id" or p.get("name", "").endswith("_id"))]
+    if not parameters:
+        parameters = [p for p in endpoint.get("parameters", []) if p.get("in") == "path"]
+    # Nested resource IDs are ambiguous: never replace a tenant ID by guessing.
+    if len(parameters) != 1:
+        return None
+    parameter = parameters[0]
+    name, location = parameter["name"], parameter["in"]
+    values = inputs["path_values"] if location == "path" else inputs["query"]
+    generated = _nonexistent_value(parameter.get("schema"), values.get(name))
+    if generated is _MISSING:
+        return None
+    copied = dict(inputs)
+    if location == "query":
+        copied["query"] = {**inputs["query"], name: generated}
+    else:
+        path_values = {**inputs["path_values"], name: generated}
+        path = _PATH_PARAMETER.sub(lambda match: quote(str(path_values[match[1]]), safe=""), endpoint["path"])
+        copied["url"] = base_url.rstrip("/") + path
+    return copied
+
+
+async def _differential_result(runtime, endpoint, inputs, forbidden, rule, baseline, comparison):
+    async def observe(request_inputs, context):
+        try:
+            response = await runtime.request(endpoint, request_inputs, context, timeout_is_inconclusive=True)
+            return _response_record(response)
+        except _Stop as exc:
+            if exc.reason == "timeout":
+                return {"error": "timeout"}
+            raise
+
+    baseline_record = _response_record(baseline)
+    forbidden_record = await observe(inputs, forbidden)
+    evaluate = {"baseline": baseline_record, "forbidden": forbidden_record, **comparison}
+    # Denials, overload and failed/unsupported responses need no extra traffic.
+    if not 200 <= forbidden_record.get("status", 0) < 300:
+        return evaluate_differential(**evaluate)
+    controls = {"nonexistent_object": True, "unauthenticated": True, **rule.get("controls", {})}
+    nonexistent = unauthenticated = None
+    skipped = False
+    if controls["nonexistent_object"]:
+        control_inputs = _nonexistent_inputs(endpoint, inputs, runtime.inventory["base_url"])
+        skipped = control_inputs is None
+        if control_inputs is not None:
+            nonexistent = await observe(control_inputs, forbidden)
+    if controls["unauthenticated"]:
+        # Context credentials are never copied into shared headers; empty Cookie
+        # plus auth=None also prevents HTTPX cookie-jar and default-auth reuse.
+        anonymous = {**inputs, "required_headers": set()}
+        unauthenticated = await observe(anonymous, None)
+    evaluate.update(nonexistent=nonexistent, unauthenticated=unauthenticated, nonexistent_skipped=skipped)
+    provisional = evaluate_differential(confirm=0, **evaluate)
+    confirmations = []
+    if provisional["status"] == "failed":
+        for _ in range(rule.get("confirm", 2)):
+            observation = await observe(inputs, forbidden)
+            confirmations.append(observation)
+            # Stop on overload/timeouts; do not hammer an unhealthy target.
+            if observation.get("error") or observation.get("status") == 429 or observation.get("status", 0) >= 500:
+                break
+    return evaluate_differential(confirm=rule.get("confirm", 2), confirm_responses=confirmations, **evaluate)
 
 
 async def run_rules(inventory: dict, rules: list[dict], client,
@@ -549,12 +736,16 @@ async def run_rules(inventory: dict, rules: list[dict], client,
                 matches = [e for e in inventory["endpoints"]
                            if e["path"] == target["path"] and e["method"] == target["method"]]
                 if not matches:
-                    raise _Stop("Selected endpoint is absent from inventory.", "skipped")
+                    raise _Stop("Selected endpoint is absent from inventory.", "skipped", "endpoint_absent")
                 if len(matches) != 1:
                     raise _Stop("Selected endpoint is ambiguous in inventory.")
                 endpoint = matches[0]
+                differential = "leak_detection" in rule
+                comparison = _differential_config(rule, variables) if differential else None
                 auth = rule.get("auth_contexts", {})
                 primary, forbidden = auth.get("primary"), auth.get("forbidden")
+                if differential and (primary is None or forbidden is None):
+                    raise _Stop("Differential rules require primary and forbidden contexts.", "error", "invalid_rule")
                 runtime.headers(primary)
                 runtime.headers(forbidden)
                 op = endpoint.get("operation_id")
@@ -563,20 +754,35 @@ async def run_rules(inventory: dict, rules: list[dict], client,
                 forbidden_headers = dict(inputs["headers"])
                 forbidden_headers.update({k.lower(): v for k, v in runtime.headers(forbidden).items()})
                 if any(not forbidden_headers.get(k) for k in inputs["required_headers"]):
-                    raise _Stop("Unresolved required forbidden-context header.")
+                    raise _Stop("Unresolved required forbidden-context header.", "error", "execution_error")
                 if primary is not None:
-                    baseline = await runtime.request(endpoint, inputs, primary)
+                    try:
+                        baseline = await runtime.request(endpoint, inputs, primary)
+                    except _Stop as exc:
+                        if differential and exc.reason == "timeout":
+                            raise _Stop("Primary baseline timed out.", reason="baseline_timeout") from None
+                        raise
                     if not 200 <= baseline.status_code < 300:
-                        raise _Stop("Primary baseline did not return 2xx; forbidden request not sent.")
+                        raise _Stop("Primary baseline did not return 2xx; forbidden request not sent.",
+                                    "error", "baseline_not_2xx")
                     runtime.remember(endpoint, baseline, primary)
-                response = await runtime.request(endpoint, inputs, forbidden)
-                details = _assertions(response, rule["assertions"], variables)
-                passed = all(detail["passed"] for detail in details)
-                result.update(status="passed" if passed else "failed", assertions=details,
-                              message="All assertions passed." if passed else "One or more assertions failed.")
+                if differential:
+                    result.update(await _differential_result(runtime, endpoint, inputs, forbidden,
+                                                             rule, baseline, comparison))
+                else:
+                    response = await runtime.request(endpoint, inputs, forbidden)
+                    details = _assertions(response, rule["assertions"], variables)
+                    passed = all(detail["passed"] for detail in details)
+                    result.update(status="passed" if passed else "failed", assertions=details,
+                                  message="All assertions passed." if passed else "One or more assertions failed.")
+                    if not passed:
+                        result.update(reason="assertion_failed", verdict="FAIL")
             except _Stop as exc:
-                result.update(status=exc.status, message=exc.message)
+                result.update(status=exc.status, message=exc.message,
+                              verdict={"error": "ERROR", "skipped": "SKIPPED", "inconclusive": "INCONCLUSIVE"}[exc.status])
+                result["reason"] = exc.reason or "execution_error"
             except Exception:
-                result.update(status="error", message="Rule execution could not be completed.")
+                result.update(status="error", verdict="ERROR", message="Rule execution could not be completed.",
+                              reason="execution_error")
             results.append(result)
     return results
