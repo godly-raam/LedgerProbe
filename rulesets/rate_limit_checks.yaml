@@ -1,0 +1,16 @@
+# A response-contract check, not a traffic flood. Select only after arranging
+# an exhausted quota on an authorized target; adapt this endpoint to its spec.
+id: rate-limit-response-contract
+name: Exhausted quota returns a bounded retry interval
+severity: MEDIUM
+owasp_category: API4:2023
+cvss_score: 5.3
+target_endpoints:
+  - path: /quota-probe
+    method: GET
+assertions:
+  - type: status_code
+    expected: 429
+  - type: header
+    name: Retry-After
+    expected: "{{retry_after}}"

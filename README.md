@@ -4,6 +4,8 @@
 
 FinShield-Core is a self-contained lab. It ships an intentionally vulnerable parent–teen neobank API, a stateful fuzzer that proves the flaws with captured traffic, an Android attestation inspector, and a Next.js console that turns the JSON reports into an executive view, a permission graph, and side-by-side patches.
 
+**LedgerProbe** is the target-agnostic security automation engine in this repository. Its separate CLI consumes API specifications and YAML policies without importing bank-specific routes or login logic. The original lab fuzzer and dashboard report format remain compatible.
+
 > **Authorized lab only.** Every account and dollar in this repository is synthetic. The API ships with deliberate vulnerabilities and a dev JWT secret. Never expose it to a network or reuse its code in a real bank. See [Safety and limitations](#safety-and-limitations).
 
 ---
@@ -52,6 +54,16 @@ Four modules:
 finshield-core/
 ├── docker-compose.yml
 ├── README.md
+├── ledgerprobe.py            # target-agnostic scan CLI
+├── requirements.txt          # engine dependencies
+├── pkg/
+│   ├── parser/               # OpenAPI/Swagger/Postman inventory + graph
+│   ├── rules/                # YAML policies, assertions, scoped execution state
+│   ├── reporter/             # SARIF, JUnit, Slack/Teams/Jira/Linear
+│   └── guardrails/           # rate limiting, adaptive admission, read-only mode
+├── rulesets/                 # example isolation and quota-response policies
+├── examples/                 # auth-input template and lab-only setup
+├── tests/                    # engine tests, no external target required
 ├── mock-bank-api/
 │   ├── app/                  # FastAPI app, models, auth, routes
 │   ├── tests/test_lab.py     # 7 tests covering every toggle
@@ -77,6 +89,99 @@ finshield-core/
 ```
 
 ---
+
+## LedgerProbe: specification-driven scans
+
+Requires Python 3.11+. Install from the repository root:
+
+```bash
+python -m pip install -r requirements.txt
+python ledgerprobe.py --help
+```
+
+Prepare a JSON inputs file using [`examples/inputs.json`](examples/inputs.json), replacing the example tokens with **two authorized test identities** and the object ID with an object owned by the primary identity. Keep real credentials outside version control and restrict the file to mode `0600`.
+
+```bash
+python ledgerprobe.py \
+  --spec ./openapi.yaml \
+  --base-url https://staging.example.com \
+  --rules rulesets/abac_isolation.yaml \
+  --inputs /secure/scan-inputs.json \
+  --read-only --max-rps 5 --concurrency 4 \
+  --sarif results.sarif --junit results.xml
+```
+
+Adapt the rule's `target_endpoints` and parameter names to your inventory; the bundled isolation rule targets the lab API, not arbitrary services. `--spec` also accepts an HTTP(S) URL, Swagger 2.0, OpenAPI 3.0/3.1 JSON/YAML, or a Postman Collection 2.1 file. The engine validates OpenAPI and normalizes Postman folders, variables, requests, bodies, and authentication metadata. Authentication metadata is **not** automatically used as credentials: supply named header contexts explicitly.
+
+The spec's server is used unless `--base-url` explicitly overrides **all** servers. A missing/relative server needs an override. Differing operation-level servers fail closed rather than silently sending credentials to a second target. Only scan trusted specs and rules against authorized targets; this is not a network sandbox. External `$ref` documents must be bundled into local references before scanning.
+
+### Policies and stateful dependencies
+
+```yaml
+id: bola-cross-tenant-access
+name: Broken Object Level Authorization Audit
+severity: HIGH
+owasp_category: API1:2023
+cvss_score: 8.1
+target_endpoints:
+  - path: /objects/{object_id}
+    method: GET
+auth_contexts:
+  primary: owner
+  forbidden: other_tenant
+parameters:
+  path:
+    object_id: "{{object_id}}"
+assertions:
+  - type: status_code
+    expected: 403
+  - type: body
+    path: error.code
+    expected: forbidden
+```
+
+Input JSON has `contexts` (named HTTP-header maps) and `variables` (JSON values). Assertions support status codes, named headers, JSON field equality, existence, and types. YAML loading rejects unsafe constructors, duplicate keys, unknown fields, and malformed policies. See [`pkg/rules/README.md`](pkg/rules/README.md) for the full format, body/parameter inputs, and execution contract.
+
+A primary-context request must succeed with 2xx before replaying the **same object inputs** under the forbidden context. Missing credentials, unresolved inputs, unsuccessful baselines, dependency cycles, or ambiguous mappings are execution errors, not vulnerability findings. Omitting `primary` allows single-request checks without a baseline. Reports exclude tokens, response bodies, expanded object IDs, and exception text; do not put secrets in rule metadata or endpoint templates.
+
+The parser builds candidate graph edges from exact response field/leaf names to path/query inputs and required top-level JSON body properties. Missing required inputs can run their declared producer under the primary identity; successful responses are cached by operation **and identity** for that scan. Forbidden responses never update state. Multiple producers fail closed; arrays are not arbitrarily reduced to their first item. Renamed IDs need explicit variables rather than guessed `id` → `wallet_id` aliases. Only selected rule targets and necessary dependencies are executed. Full JSON Schema evaluation, non-JSON request serialization, and automatic OAuth/login flows are not implemented; unsupported required inputs fail closed.
+
+### Safety and CI behavior
+
+- Every engine HTTP operation, including spec retrieval, dependencies, and optional notifications, uses `GuardedClient`. Redirects and automatic retries are disabled.
+- `--max-rps` sets a shared token bucket with one initial token, preventing startup bursts. `--concurrency` is an admission ceiling; current rule execution is deliberately sequential.
+- A 429 halves the admission limit immediately; a window with at least five responses and at least 50% 5xx also halves it. Twenty successful responses recover one slot. `Retry-After` applies a shared cooldown capped at 60 seconds; 429 without a valid header pauses for one second. In-flight requests are not cancelled.
+- `--read-only` permits only GET, HEAD, and OPTIONS, including dependencies. An explicit `--allow-mutation 'POST:/exact/url-encoded/path'` exception permits that method/path, not a wildcard or template. Read-only cannot guarantee a misdesigned GET endpoint is side-effect-free.
+- Exit codes: **0** completed checks passed; **1** policy assertion failure; **2** configuration/execution/notification error or no executable checks. Individual safety/absent-endpoint skips are visible in JUnit; partial scans can include skips and still pass.
+- The legacy `logic-fuzzer/main.py` remains a **destructive lab tool**. LedgerProbe safeguards do not change its intentionally concurrent payment/reset behavior.
+
+SARIF 2.1.0 includes rule/CVSS/OWASP metadata, stable fingerprints, logical endpoint locations, and execution-error notifications. Local spec files inside this repository also receive a physical spec-file location, without invented line numbers. GitHub Code Scanning can ingest SARIF; use a checked-in spec for source-linked alerts. URL/external specs have endpoint-only locations, so source-code UI presentation may be limited. Upload JUnit XML through your CI's normal test-results publisher. **GitLab's native security dashboard requires GitLab-specific security-report JSON; SARIF is not a substitute for that schema.**
+
+### Optional notifications
+
+Pass `--webhooks /secure/webhooks.json` containing an array such as:
+
+```json
+[
+  {"kind": "slack", "url": "https://hooks.slack.com/services/REPLACE_ME"},
+  {"kind": "jira", "url": "https://example.atlassian.net/rest/api/3/issue",
+   "project": "SEC", "headers": {"Authorization": "Basic REPLACE_ME"}},
+  {"kind": "linear", "url": "https://api.linear.app/graphql",
+   "team_id": "REPLACE_ME", "headers": {"Authorization": "REPLACE_ME"}}
+]
+```
+
+Kinds: `slack`, `teams` (text-compatible incoming webhook), `jira` (Cloud REST v3 Task creation), `linear` (GraphQL issue creation), and `generic`. Only failed **HIGH/CRITICAL** checks are sent. URLs must use HTTPS except loopback development endpoints. These are explicit external POSTs even during read-only scans; a separate guarded notifier client permits them without relaxing target safety. This shares rule metadata and endpoint templates with the configured third parties, may incur service costs/rate limits, and needs provider credentials where applicable. Delivery is single-attempt, without deduplication; rerunning a scan can create duplicate tickets. Reports are written before notification, and notification failures return exit code 2.
+
+### Demo and tests
+
+`./demo.sh` preserves the existing dashboard/mobile/logic audit and additionally downloads a local `.demo/openapi.json`, creates mode-0600 synthetic auth inputs, and runs a read-only LedgerProbe scan. Outputs include `logic-fuzzer/reports/results.sarif` and `results.xml`; expected lab findings do not stop the demo, but engine errors do. Install both lab and engine dependencies first:
+
+```bash
+python -m pip install -r mock-bank-api/requirements-dev.txt -r requirements-dev.txt
+python -m pytest tests -q
+bash -n demo.sh
+```
 
 ## Quick start
 

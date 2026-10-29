@@ -56,9 +56,9 @@ command -v curl >/dev/null || {
   exit 1
 }
 
-if ! "$PYTHON" -c "import fastapi, httpx, jwt, sqlalchemy, uvicorn" >/dev/null 2>&1; then
+if ! "$PYTHON" -c "import fastapi, httpx, jwt, sqlalchemy, uvicorn, yaml, openapi_spec_validator" >/dev/null 2>&1; then
   echo "[!] Python dependencies are missing for ${PYTHON}." >&2
-  echo "    Install: ${PYTHON} -m pip install -r mock-bank-api/requirements-dev.txt -r logic-fuzzer/requirements.txt" >&2
+  echo "    Install: ${PYTHON} -m pip install -r mock-bank-api/requirements-dev.txt -r requirements.txt" >&2
   exit 1
 fi
 
@@ -117,11 +117,30 @@ else
   echo "[+] API healthy (pid ${API_PID})."
 fi
 
-# --- 2. Logic fuzzer ---------------------------------------------------------
+# --- 2. Logic fuzzer and spec-driven LedgerProbe -----------------------------
 echo "[2/4] Running logic fuzzer against http://127.0.0.1:${API_PORT}..."
 (
   cd "${ROOT_DIR}/logic-fuzzer"
   "$PYTHON" main.py --base-url "http://127.0.0.1:${API_PORT}" --out "$REPORTS_DIR"
+)
+
+echo "[*] LedgerProbe: local OpenAPI input, read-only policies, SARIF + JUnit..."
+(
+  cd "$ROOT_DIR"
+  "$PYTHON" -m examples.prepare_demo --base-url "http://127.0.0.1:${API_PORT}" --out "$LOG_DIR"
+  scan_status=0
+  "$PYTHON" ledgerprobe.py \
+    --spec "${LOG_DIR}/openapi.json" \
+    --base-url "http://127.0.0.1:${API_PORT}" \
+    --rules rulesets/abac_isolation.yaml \
+    --inputs "${LOG_DIR}/inputs.json" \
+    --read-only --max-rps 5 \
+    --sarif "${REPORTS_DIR}/results.sarif" \
+    --junit "${REPORTS_DIR}/results.xml" || scan_status=$?
+  # A vulnerability is expected in this lab; execution/config errors are not.
+  if (( scan_status > 1 )); then
+    exit "$scan_status"
+  fi
 )
 
 # --- 3. Mobile attestation harness ------------------------------------------
@@ -162,6 +181,7 @@ echo "  • Mock API:      http://127.0.0.1:${API_PORT}"
 echo "  • API docs:     http://127.0.0.1:${API_PORT}/docs"
 echo "  • Dashboard UI: http://127.0.0.1:${DASHBOARD_PORT}"
 echo "  • Reports:      ${REPORTS_DIR}"
+echo "  • SARIF:        ${REPORTS_DIR}/results.sarif"
 echo "=========================================================="
 
 if (( ! STARTED_API && ! STARTED_DASHBOARD )); then

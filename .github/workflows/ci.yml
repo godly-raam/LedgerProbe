@@ -27,6 +27,8 @@ jobs:
           cache-dependency-path: |
             mock-bank-api/requirements-dev.txt
             logic-fuzzer/requirements.txt
+            requirements.txt
+            requirements-dev.txt
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -38,7 +40,10 @@ jobs:
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r mock-bank-api/requirements-dev.txt -r logic-fuzzer/requirements.txt
+          pip install -r mock-bank-api/requirements-dev.txt -r requirements-dev.txt
+
+      - name: Test LedgerProbe engine
+        run: python -m pytest tests -q --junitxml=.demo/engine-tests.xml
 
       - name: Test API behavior
         working-directory: mock-bank-api
@@ -103,6 +108,28 @@ jobs:
               f"{report['run']['checks_passed']}/{report['run']['checks_total']} checks passed"
           )
           PY
+
+          cd ..
+          python -m examples.prepare_demo --base-url http://127.0.0.1:8000
+          scan_status=0
+          python ledgerprobe.py --spec .demo/openapi.json \
+            --base-url http://127.0.0.1:8000 --rules rulesets/abac_isolation.yaml \
+            --inputs .demo/inputs.json --read-only --max-rps 5 \
+            --sarif logic-fuzzer/reports/results.sarif \
+            --junit logic-fuzzer/reports/results.xml || scan_status=$?
+          # This intentionally vulnerable lab must produce a policy failure.
+          test "$scan_status" -eq 1
+
+      - name: Upload engine reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ledgerprobe-reports
+          path: |
+            .demo/engine-tests.xml
+            logic-fuzzer/reports/results.sarif
+            logic-fuzzer/reports/results.xml
+          if-no-files-found: warn
 
       - name: Build dashboard
         working-directory: dashboard
