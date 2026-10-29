@@ -1,0 +1,7 @@
+{
+  "contexts": {
+    "parent_user_a": {"Authorization": "Bearer REPLACE_WITH_OWNER_TOKEN"},
+    "parent_user_b": {"Authorization": "Bearer REPLACE_WITH_OTHER_TENANT_TOKEN"}
+  },
+  "variables": {"teen_id": "REPLACE_WITH_OWNER_OBJECT_ID"}
+}

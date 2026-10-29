@@ -9,6 +9,10 @@ __pycache__/
 mock-bank-api/finshield.db*
 
 logic-fuzzer/reports/*.json
+logic-fuzzer/reports/*.sarif
+logic-fuzzer/reports/*.xml
+/results.sarif
+/results.xml
 mobile-harness/reports/
 .demo/
 
