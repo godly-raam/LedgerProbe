@@ -4,6 +4,8 @@ import hashlib
 import json
 from pathlib import Path
 
+from ._evidence import result_properties
+
 
 _LEVELS = {"critical": "error", "high": "error", "medium": "warning", "low": "note", "info": "note"}
 
@@ -17,6 +19,24 @@ def write_sarif(results, path, *, source_uri=None) -> Path:
     """
     rules, indexes, findings, notifications = [], {}, [], []
     for result in results:
+        if result["status"] == "inconclusive":
+            identity = json.dumps([result["rule_id"], result["method"], result["path"]], ensure_ascii=True)
+            inconclusive_location: dict[str, object] = {"logicalLocations": [{
+                "fullyQualifiedName": result["method"] + " " + result["path"],
+            }]}
+            if source_uri is not None:
+                inconclusive_location["physicalLocation"] = {"artifactLocation": {"uri": str(source_uri)}}
+            findings.append({
+                "level": "note",
+                "message": {"text": result["message"] or result["name"]},
+                "locations": [inconclusive_location],
+                "partialFingerprints": {
+                    "ledgerprobe/v1": hashlib.sha256(identity.encode("utf-8")).hexdigest(),
+                },
+                "kind": "review",
+                "properties": {"status": "inconclusive", "tags": ["inconclusive"], **result_properties(result)},
+            })
+            continue
         rule_id = result["rule_id"]
         if rule_id not in indexes:
             indexes[rule_id] = len(rules)
@@ -32,11 +52,14 @@ def write_sarif(results, path, *, source_uri=None) -> Path:
             })
         reference = {"id": rule_id, "index": indexes[rule_id]}
         if result["status"] == "error":
-            notifications.append({
+            notification = {
                 "associatedRule": reference,
                 "level": "error",
                 "message": {"text": result["message"] or "Check execution failed."},
-            })
+            }
+            if properties := result_properties(result):
+                notification["properties"] = properties
+            notifications.append(notification)
         elif result["status"] == "failed":
             identity = json.dumps([rule_id, result["method"], result["path"]], ensure_ascii=True)
             location: dict[str, object] = {"logicalLocations": [{
@@ -44,7 +67,7 @@ def write_sarif(results, path, *, source_uri=None) -> Path:
             }]}
             if source_uri is not None:
                 location["physicalLocation"] = {"artifactLocation": {"uri": str(source_uri)}}
-            findings.append({
+            finding = {
                 "ruleId": rule_id,
                 "ruleIndex": indexes[rule_id],
                 "level": _LEVELS[result["severity"]],
@@ -53,7 +76,10 @@ def write_sarif(results, path, *, source_uri=None) -> Path:
                 "partialFingerprints": {
                     "ledgerprobe/v1": hashlib.sha256(identity.encode("utf-8")).hexdigest(),
                 },
-            })
+            }
+            if properties := result_properties(result):
+                finding["properties"] = properties
+            findings.append(finding)
     report = {
         "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
         "version": "2.1.0",

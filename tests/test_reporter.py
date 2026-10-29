@@ -101,6 +101,23 @@ def test_sarif_no_findings_is_successful(tmp_path, rows):
     assert run["invocations"] == [{"executionSuccessful": True, "toolExecutionNotifications": []}]
 
 
+def test_sarif_inconclusive_is_a_non_security_note(tmp_path):
+    path = tmp_path / "report.json"
+    write_sarif([result(status="inconclusive", message="Authorization could not be determined",
+                        reason="Prerequisite data was unavailable")], path)
+    run = json.loads(path.read_text())["runs"][0]
+    assert run["tool"]["driver"]["rules"] == []
+    assert run["invocations"] == [{"executionSuccessful": True, "toolExecutionNotifications": []}]
+    assert run["results"] == [{
+        "level": "note",
+        "kind": "review",
+        "message": {"text": "Authorization could not be determined"},
+        "locations": [{"logicalLocations": [{"fullyQualifiedName": "GET /items/{id}"}]}],
+        "partialFingerprints": {"ledgerprobe/v1": run["results"][0]["partialFingerprints"]["ledgerprobe/v1"]},
+        "properties": {"status": "inconclusive", "tags": ["inconclusive"]},
+    }]
+
+
 def test_sarif_error_is_not_security_finding_and_empty_messages_are_valid(tmp_path):
     path = tmp_path / "report.json"
     write_sarif([result(status="error", message="")], path)
@@ -181,6 +198,55 @@ def test_junit_all_statuses_and_xml_escaping(tmp_path):
     assert rows == original
 
 
+def test_junit_inconclusive_is_skipped_with_optional_reason(tmp_path):
+    path = tmp_path / "junit.xml"
+    write_junit([
+        result(status="inconclusive", message="Check could not run", reason="Target was unavailable"),
+        result(status="inconclusive", message="Legacy result"),
+    ], path)
+    suite = ET.parse(path).getroot()
+    assert suite.attrib["skipped"] == "2"
+    cases = suite.findall("testcase")
+    assert [(case[0].tag, case[0].get("message")) for case in cases] == [
+        ("skipped", "Check could not run: Target was unavailable"),
+        ("skipped", "Legacy result"),
+    ]
+
+
+@pytest.mark.parametrize("source_uri", [None, "specs/openapi.yaml"])
+def test_official_sarif_schema_accepts_differential_review_notes(tmp_path, source_uri):
+    schema_path = Path(__file__).resolve().parents[1] / ".demo" / "sarif-schema.json"
+    if not schema_path.is_file():
+        pytest.skip("Official SARIF schema is not available locally")
+    jsonschema = pytest.importorskip("jsonschema")
+    path = tmp_path / "review.sarif"
+    rows = [result(status="inconclusive", verdict="INCONCLUSIVE", reason="ambiguous_2xx"),
+            result(status="failed", verdict="FAIL", reason="leak_detected")]
+    write_sarif(rows, path, source_uri=source_uri)
+    validator = jsonschema.Draft7Validator(json.loads(schema_path.read_text()),
+                                          format_checker=jsonschema.Draft7Validator.FORMAT_CHECKER)
+    validator.validate(json.loads(path.read_text()))
+
+
+def test_differential_evidence_is_allowlisted_in_sarif_and_junit(tmp_path):
+    row = result(status="failed", verdict="FAIL", reason="leak_detected", confidence="high", evidence={
+        "overlap_count": 2, "canary_matched": True, "confirm_runs": 2,
+        "nonexistent_skipped": False,
+        "control_statuses": {"nonexistent_object": 404, "unauthenticated": 401, "body": "discard-me"},
+        "shape_hashes": {"primary": "a" * 64, "forbidden": "b" * 64, "body": "discard-me"},
+        "response": "discard-me", "canary_value": "discard-me", "headers": "discard-me",
+    })
+    sarif_path, junit_path = tmp_path / "result.sarif", tmp_path / "result.xml"
+    write_sarif([row], sarif_path)
+    write_junit([row], junit_path)
+    props = json.loads(sarif_path.read_text())["runs"][0]["results"][0]["properties"]
+    assert props["reason"] == "leak_detected"
+    assert props["evidence"]["confirm_runs"] == 2
+    assert props["evidence"]["canary_matched"] is True
+    assert ET.parse(junit_path).find(".//property[@name='ledgerprobe.reason']").get("value") == "leak_detected"
+    assert "discard-me" not in sarif_path.read_text() + junit_path.read_text()
+
+
 def test_junit_empty(tmp_path):
     path = tmp_path / "junit.xml"
     write_junit([], path)
@@ -197,7 +263,8 @@ def test_webhook_payloads_filtering_headers_and_redaction():
             return httpx.Response(200, json={"data": {"issueCreate": {"success": True}}})
         rows = [result(), result(severity="critical"), result(severity="medium"),
                 result(severity="low"), result(severity="info"), result(status="passed"),
-                result(status="error"), result(status="skipped")]
+                result(status="error"), result(status="skipped"),
+                result(status="inconclusive", reason="SECRET reason")]
         for row in rows:
             row.update(message="SECRET message", assertions=[{"response_body": "SECRET body"}],
                        auth_context={"Authorization": "SECRET auth"}, response_body="SECRET response",
