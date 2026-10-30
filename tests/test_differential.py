@@ -55,7 +55,7 @@ def scenario_handler(case):
                                   json=OWNER if case == "public" else {"error": "auth required"})
         if request.url.path != "/objects/object-a":
             if case in {"cached", "static"}:
-                return httpx.Response(200, json=OWNER if case == "cached" else {"currency": "USD", "state": "active"})
+                return httpx.Response(200, json=OWNER if case == "cached" else {"currency": "USD"})
             return httpx.Response(404, json={"error": "absent"})
         forbidden_runs += 1
         if case == "timeout":
@@ -63,7 +63,7 @@ def scenario_handler(case):
         if case == "unstable" and forbidden_runs > 1:
             return httpx.Response(403)
         status = {"403": 403, "404": 404, "500": 500, "429": 429}.get(case, 200)
-        body = {"currency": "USD", "state": "active"} if case == "static" else {"error": "forbidden"} if case == "soft" else OWNER
+        body = {"currency": "USD"} if case == "static" else {"error": "forbidden"} if case == "soft" else OWNER
         return httpx.Response(status, json=body, headers={"Retry-After": "0.01"} if status == 429 else {})
     return handler
 
@@ -74,7 +74,7 @@ def scenario_handler(case):
     ("static", "PASS", None, "soft_deny"), ("public", "PASS", None, "public_endpoint"),
     ("500", "INCONCLUSIVE", "server_error", None), ("429", "INCONCLUSIVE", "rate_limited", None),
     ("timeout", "INCONCLUSIVE", "timeout", None), ("unstable", "INCONCLUSIVE", "not_reproducible", None),
-    ("cached", "PASS", None, "soft_deny"), ("baseline", "ERROR", "baseline_not_2xx", None),
+    ("cached", "INCONCLUSIVE", "invalid_control", None), ("baseline", "ERROR", "baseline_not_2xx", None),
 ])
 def test_transport_scenarios(case, verdict, reason, note):
     result, requests = scan(scenario_handler(case), read_only=True)

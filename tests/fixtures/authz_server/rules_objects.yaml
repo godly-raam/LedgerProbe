@@ -19,7 +19,7 @@ acceptable_status:
 leak_detection:
   canaries:
     - "{{canary_value}}"
-  min_unique_leaf_values: 2
+  min_unique_leaf_values: 3
   ignore_fields:
     - detail
 controls:

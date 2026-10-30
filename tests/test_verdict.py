@@ -36,8 +36,8 @@ def evaluate(**overrides):
     ({"forbidden": observation(404)}, "PASS", None, None),
     ({"forbidden": observation(body={"error": "forbidden"}),
       "nonexistent": observation(body={"error": "absent"})}, "PASS", None, "soft_deny"),
-    ({"baseline": observation(body=GENERIC), "forbidden": observation(body=GENERIC),
-      "nonexistent": observation(body=GENERIC)}, "PASS", None, "soft_deny"),
+    ({"baseline": observation(body=GENERIC), "forbidden": observation(body={"currency": "USD"}),
+      "nonexistent": observation(body={"currency": "USD"})}, "PASS", None, "soft_deny"),
     ({"unauthenticated": observation(body=dict(reversed(list(OWNER.items()))))}, "PASS", None, "public_endpoint"),
     ({"forbidden": observation(500)}, "INCONCLUSIVE", "server_error", None),
     ({"forbidden": observation(429)}, "INCONCLUSIVE", "rate_limited", None),
@@ -45,7 +45,7 @@ def evaluate(**overrides):
     ({"confirm_responses": [observation(403), observation(403)]}, "INCONCLUSIVE", "not_reproducible", None),
     ({"confirm_responses": []}, "INCONCLUSIVE", "not_reproducible", None),
     ({"confirm_responses": [observation(body=OWNER)]}, "INCONCLUSIVE", "not_reproducible", None),
-    ({"nonexistent": observation(body=OWNER)}, "PASS", None, "soft_deny"),
+    ({"nonexistent": observation(body=OWNER)}, "INCONCLUSIVE", "invalid_control", None),
     ({"baseline": observation(403)}, "ERROR", "baseline_not_2xx", None),
     ({"baseline": {"error": "timeout"}}, "ERROR", "baseline_timeout", None),
     ({"canaries": ["owner-only-marker"], "min_unique_leaf_values": 99}, "FAIL", "leak_detected", None),
@@ -69,6 +69,61 @@ def test_verdict_table(overrides, verdict, reason, note):
     assert result.get("note") == note
     if verdict != "PASS":
         assert isinstance(result["reason"], str)
+
+
+@pytest.mark.parametrize("control,minimum,canaries", [
+    (GENERIC, 2, []),
+    ({"label": "owner-only-marker"}, 99, ["owner-only-marker"]),
+    ({"marker": "declared-but-unobserved"}, 99, ["declared-but-unobserved"]),
+    (OWNER, 2, ["owner-only-marker"]),
+])
+def test_invalid_control_cannot_subtract_owner_evidence(control, minimum, canaries):
+    result = evaluate(nonexistent=observation(body=control), min_unique_leaf_values=minimum, canaries=canaries)
+    assert (result["verdict"], result["reason"]) == ("INCONCLUSIVE", "invalid_control")
+    assert result["confidence"] == "reduced"
+    assert result["evidence"]["overlap_count"] == len(set(OWNER.values()))
+    assert result.get("note") is None
+
+
+@pytest.mark.parametrize("status", [401, 403, 404])
+def test_accepted_denial_remains_pass_with_invalid_control(status):
+    result = evaluate(forbidden=observation(status), nonexistent=observation(body=OWNER))
+    assert result["verdict"] == "PASS"
+    assert result.get("reason") is None
+
+
+@pytest.mark.parametrize("canaries", [[], ["owner-only-marker"]])
+def test_invalid_control_prevents_public_endpoint_pass(canaries):
+    result = evaluate(nonexistent=observation(body=GENERIC), unauthenticated=observation(body=OWNER),
+                      canaries=canaries)
+    assert (result["verdict"], result["reason"]) == ("INCONCLUSIVE", "invalid_control")
+    assert result.get("note") is None
+
+
+def test_independent_owner_canary_proves_leak_despite_invalid_control():
+    result = evaluate(nonexistent=observation(body=GENERIC), canaries=["owner-only-marker"])
+    assert (result["verdict"], result["reason"]) == ("FAIL", "leak_detected")
+    assert result["confidence"] == "reduced"
+    assert result["evidence"]["canary_matched"] is True
+    assert result["evidence"]["confirm_runs"] == 2
+    result = evaluate(nonexistent=observation(body=GENERIC), canaries=["owner-only-marker"],
+                      confirm_responses=[observation(403), observation(403)])
+    assert result["reason"] == "not_reproducible"
+
+
+def test_control_overlap_below_threshold_remains_usable():
+    result = evaluate(baseline=observation(body=GENERIC), forbidden=observation(body=GENERIC),
+                      nonexistent=observation(body=GENERIC), min_unique_leaf_values=3)
+    assert result["verdict"] == "PASS"
+    assert result["note"] == "soft_deny"
+    assert result["evidence"]["overlap_count"] == 0
+
+
+def test_ignored_control_leaves_do_not_invalidate_control():
+    result = evaluate(nonexistent=observation(body={"label": "owner-only-marker"}),
+                      canaries=["owner-only-marker"], min_unique_leaf_values=99, ignore_fields=["label"])
+    assert result["reason"] == "ambiguous_2xx"
+    assert result["evidence"]["canary_matched"] is False
 
 
 def test_ignore_subtrees_and_distinct_typed_values():

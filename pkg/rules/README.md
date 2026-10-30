@@ -225,6 +225,20 @@ The comparison ignores shared/static values using the nonexistent control.
 If that control is unavailable/disabled/non-JSON, overlap alone is insufficient:
 only an explicit qualifying canary can establish a leak, at reduced confidence.
 
+A JSON nonexistent-object control is **invalid** when it returns 2xx and either
+shares at least `min_unique_leaf_values` distinct scalar values with the primary
+baseline or contains any configured canary, after `ignore_fields` exclusions.
+It must not subtract values from owner/forbidden overlap, establish a soft deny,
+or permit a public-endpoint PASS. An initial forbidden status in
+`acceptable_status` still yields PASS. For forbidden 2xx, invalid control yields
+INCONCLUSIVE with reason `invalid_control`, except that an explicit owner canary
+present in the baseline and forbidden response but **absent from the control**
+can independently establish FAIL, with reduced confidence and the usual
+confirmation requirement. A canary also exposed by the control is not
+owner-specific evidence; identical unauthenticated data cannot establish an
+authorization leak. `invalid_control` deliberately takes precedence over
+`public_endpoint` and `soft_deny` classification, not merely over overlap scoring.
+
 ### Controls, read-only operation, and confirmation
 
 Every baseline, dependency, forbidden, control, and confirmation request uses
@@ -237,7 +251,7 @@ path/query/body inputs; neither forbidden nor control responses update state.
 
 | Control | Behavior |
 | --- | --- |
-| `nonexistent_object` | Replays the forbidden identity with a generated candidate ID. Supports one unambiguous path/query `id` or `*_id` parameter (otherwise a single path parameter), schema-declared UUID/string/integer types, bounds, and supported string patterns. Multiple IDs, unknown/unsupported types, enums, or unsatisfied constraints skip the control and reduce confidence. UUIDs/integers are randomized; string candidates preserve existing length/separators or known prefixes and are checked against the pattern. Candidates cannot be proven absent; values returned for them are treated as shared, preventing cached/static responses from proving BOLA. Non-JSON control bodies are not usable subtraction evidence. |
+| `nonexistent_object` | Replays the forbidden identity with a generated candidate ID. Supports one unambiguous path/query `id` or `*_id` parameter (otherwise a single path parameter), schema-declared UUID/string/integer types, bounds, and supported string patterns. Multiple IDs, unknown/unsupported types, enums, or unsatisfied constraints skip the control and reduce confidence. UUIDs/integers are randomized; string candidates preserve existing length/separators or known prefixes and are checked against the pattern. Candidates cannot be proven absent; only values from a valid control are treated as shared. Owner-like 2xx controls produce `invalid_control` as described above. Non-JSON control bodies are not usable subtraction evidence. |
 | `unauthenticated` | Replays the original request with no context headers, `auth=None`, and an empty Cookie header to prevent cookie-jar reuse. An unauthenticated 2xx with identical JSON paths/typed values (after ignoring fields) yields PASS with note `public_endpoint`. This classifies public exposure, not whether public access itself is desirable. |
 
 A would-be FAIL requires `confirm` additional observations. Every repeat must
@@ -265,6 +279,7 @@ has a machine-readable `reason`. PASS annotations use `note`, not `reason`.
 | `INCONCLUSIVE` | `timeout` | Forbidden/control/confirmation request times out. |
 | `INCONCLUSIVE` | `not_reproducible` | Candidate evidence does not reproduce on every required confirmation. |
 | `INCONCLUSIVE` | `ambiguous_2xx` | Successful response is neither public nor a soft deny and has insufficient unique leak evidence. |
+| `INCONCLUSIVE` | `invalid_control` | Nonexistent-object control returns owner-like 2xx data or a canary; no independent, reproducible owner canary can prove a leak. No soft-deny/public PASS is permitted. |
 | `INCONCLUSIVE` | `unexpected_status` | Forbidden response is neither 2xx nor an accepted denial/overload status (e.g. redirect). |
 | `ERROR` | `baseline_not_2xx` / `baseline_timeout` | Primary baseline failed; no forbidden request is sent. |
 | `ERROR` | `execution_error` / `invalid_canary` | Resolution/context/transport problem, or canary resolves to a non-scalar. |

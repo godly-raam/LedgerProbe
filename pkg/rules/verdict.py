@@ -82,12 +82,25 @@ def evaluate_differential(*, baseline: dict, forbidden: dict,
     base_values = _values(baseline, ignored)
     foreign_values = _values(forbidden, ignored)
     absent_values = _values(nonexistent, ignored)
-    overlap = (base_values & foreign_values) - absent_values
-    # A configured canary must actually be present in the owner baseline and not
-    # shared by the nonexistent response (for example, a broken cache).
-    canary_values = {_typed(value) for value in canaries} & base_values
-    hits = canary_values & overlap
+    declared_canaries = {_typed(value) for value in canaries}
+    canary_values = declared_canaries & base_values
     has_negative_control = nonexistent is not None and "body" in nonexistent
+    control_overlap = base_values & absent_values
+    canary_in_control = bool(declared_canaries & absent_values)
+    control_status = nonexistent.get("status", 0) if nonexistent else 0
+    invalid_control = bool(
+        nonexistent
+        and "body" in nonexistent
+        and 200 <= control_status < 300
+        and (len(control_overlap) >= min_unique_leaf_values or canary_in_control)
+    )
+    valid_negative_control = has_negative_control and not invalid_control
+    # A failed negative control cannot label owner values as generic/shared.
+    subtract_values = set() if invalid_control else absent_values
+    overlap = (base_values & foreign_values) - subtract_values
+    # Explicit owner canaries can independently prove a leak, but a canary also
+    # returned for the nonexistent ID is no longer owner-specific evidence.
+    hits = canary_values & foreign_values - absent_values
     evidence = {
         "overlap_count": len(overlap), "canary_matched": bool(hits),
         "control_statuses": {"nonexistent_object": (nonexistent or {}).get("status"),
@@ -113,10 +126,11 @@ def evaluate_differential(*, baseline: dict, forbidden: dict,
             "unexpected_status": "Forbidden response returned an unexpected status.",
             "public_endpoint": "Unauthenticated callers receive the same data; endpoint appears public.",
             "soft_deny": "Response matches the nonexistent-object response shape without leak evidence.",
+            "invalid_control": "Nonexistent-object negative control response is invalid.",
         }
         output = {"status": status, "verdict": verdict,
                   "message": messages.get(reason or note, "Forbidden request was denied."),
-                  "confidence": "high" if has_negative_control and unauthenticated is not None else "reduced",
+                  "confidence": "high" if valid_negative_control and unauthenticated is not None else "reduced",
                   "evidence": evidence}
         if reason:
             output["reason"] = reason
@@ -136,6 +150,8 @@ def evaluate_differential(*, baseline: dict, forbidden: dict,
         return result("passed")
     if not 200 <= status < 300:
         return result("inconclusive", "unexpected_status")
+    if invalid_control and not hits:
+        return result("inconclusive", "invalid_control")
     # An unhealthy control cannot establish that overlapping values are unique
     # or that the endpoint is non-public.
     for control in (nonexistent, unauthenticated):
@@ -144,9 +160,11 @@ def evaluate_differential(*, baseline: dict, forbidden: dict,
             return result("inconclusive", problem)
     if (unauthenticated and 200 <= unauthenticated.get("status", 0) < 300
             and _same_data(forbidden, unauthenticated, ignored)):
+        if invalid_control:
+            return result("inconclusive", "invalid_control")
         return result("passed", note="public_endpoint")
     # Without a usable negative control generic/static overlap is not evidence.
-    candidate = bool(hits) or (has_negative_control and len(overlap) >= min_unique_leaf_values)
+    candidate = bool(hits) or (valid_negative_control and len(overlap) >= min_unique_leaf_values)
     if candidate:
         stable_overlap, stable_hits = set(overlap), set(hits)
         for observation in confirmations:
@@ -155,16 +173,18 @@ def evaluate_differential(*, baseline: dict, forbidden: dict,
                 return result("inconclusive", problem)
             if not 200 <= observation.get("status", 0) < 300:
                 return result("inconclusive", "not_reproducible")
-            confirmed = (_values(observation, ignored) & base_values) - absent_values
+            confirmed = (_values(observation, ignored) & base_values) - subtract_values
             stable_overlap &= confirmed
             stable_hits &= confirmed
-            if not (stable_hits or (has_negative_control and len(stable_overlap) >= min_unique_leaf_values
+            if not (stable_hits or (valid_negative_control and len(stable_overlap) >= min_unique_leaf_values
                                     and stable_overlap == overlap)):
                 return result("inconclusive", "not_reproducible")
         if len(confirmations) != confirm:
             return result("inconclusive", "not_reproducible")
         return result("failed", "leak_detected")
-    if (has_negative_control and "body" in forbidden
+    if invalid_control:
+        return result("inconclusive", "invalid_control")
+    if (valid_negative_control and "body" in forbidden
             and _shape(forbidden, ignored) == _shape(nonexistent, ignored)):
         return result("passed", note="soft_deny")
     return result("inconclusive", "ambiguous_2xx")

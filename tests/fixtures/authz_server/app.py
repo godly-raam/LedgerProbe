@@ -171,6 +171,37 @@ async def handle_object(request: Request) -> Response:
             **SEEDED_DATA["static_fields"],
         }, status_code=200)
 
+    if base_profile == "invalid_control_leak_with_canary":
+        if identity is None:
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        if obj_id != "obj-owner-1":
+            # Negative control returns 2xx overlapping baseline static fields (>= min_unique_leaf_values) without canary
+            return JSONResponse({
+                "id": obj_id,
+                **SEEDED_DATA["static_fields"],
+            }, status_code=200)
+        # Forbidden returns owner object WITH canary (actual leak)
+        return JSONResponse({
+            "id": "obj-owner-1",
+            "canary": "canary-secret-owner-9988",
+            **SEEDED_DATA["static_fields"],
+        }, status_code=200)
+
+    if base_profile == "invalid_control_leak_without_canary":
+        if identity is None:
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        if obj_id != "obj-owner-1":
+            # Negative control returns 2xx overlapping baseline static fields (invalid control) without canary
+            return JSONResponse({
+                "id": obj_id,
+                **SEEDED_DATA["static_fields"],
+            }, status_code=200)
+        # Forbidden returns owner object attributes without canary
+        return JSONResponse({
+            "id": "obj-owner-1",
+            **SEEDED_DATA["static_fields"],
+        }, status_code=200)
+
     if base_profile == "nondeterministic_leak":
         if identity == "owner":
             return JSONResponse({"id": "obj-owner-1", "canary": "canary-secret-owner-9988", **SEEDED_DATA["static_fields"]}, status_code=200)

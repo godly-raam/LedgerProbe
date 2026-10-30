@@ -178,19 +178,36 @@ nondeterministic_leak:
 
 generic_200_same_for_all:
   category: tricky
-  expected_verdict: PASS
-  expected_reason: null
-  expected_note: public_endpoint
+  expected_verdict: INCONCLUSIVE
+  expected_reason: invalid_control
+  expected_note: null
   rule_file: rules_objects.yaml
-  description: "200 with identical generic body for any id and any identity"
+  description: "Identical public data also invalidates the negative control at the configured overlap threshold"
 
 nonexistent_id_returns_200_owner_like:
   category: tricky
-  expected_verdict: PASS
-  expected_reason: null
-  expected_note: soft_deny
+  expected_verdict: INCONCLUSIVE
+  expected_reason: invalid_control
+  expected_note: null
   rule_file: rules_objects.yaml
-  description: "Control ID collides or is not provably absent"
+  description: "Control ID collides or is not provably absent, invalidating the negative control"
+
+invalid_control_leak_with_canary:
+  category: vulnerable
+  expected_verdict: FAIL
+  expected_reason: leak_detected
+  expected_note: null
+  expected_confidence: reduced
+  rule_file: rules_objects.yaml
+  description: "Forbidden response leaks owner canary while negative control is invalid"
+
+invalid_control_leak_without_canary:
+  category: tricky
+  expected_verdict: INCONCLUSIVE
+  expected_reason: invalid_control
+  expected_note: null
+  rule_file: rules_objects.yaml
+  description: "Forbidden response leaks without canary while negative control is invalid"
 
 redirect_302:
   category: tricky

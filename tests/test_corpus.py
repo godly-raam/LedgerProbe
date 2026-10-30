@@ -83,6 +83,10 @@ def test_corpus_profile(profile_name: str, profile_spec: dict, tmp_path: Path):
     assert result.get("note") == expected_note, (
         f"Profile {profile_name}: expected note {expected_note}, got {result.get('note')}"
     )
+    if "expected_confidence" in profile_spec:
+        assert result.get("confidence") == profile_spec["expected_confidence"], (
+            f"Profile {profile_name}: expected confidence {profile_spec['expected_confidence']}, got {result.get('confidence')}"
+        )
 
     # Validate CLI exit code contracts
     if expected_verdict == "FAIL":

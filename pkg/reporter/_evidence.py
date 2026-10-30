@@ -4,7 +4,7 @@ import re
 _REASONS = {"leak_detected", "assertion_failed", "baseline_not_2xx", "baseline_timeout",
             "rate_limited", "server_error", "timeout", "not_reproducible", "ambiguous_2xx",
             "unexpected_status", "invalid_rule", "invalid_canary", "execution_error",
-            "safety_blocked", "endpoint_absent"}
+            "safety_blocked", "endpoint_absent", "invalid_control"}
 
 
 def result_properties(result):
