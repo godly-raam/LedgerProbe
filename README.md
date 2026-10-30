@@ -1,10 +1,10 @@
-# FinShield-Core
+# LedgerProbe-Core
 
-[![FinShield-Core CI](https://github.com/godly-raam/LedgerProbe/actions/workflows/ci.yml/badge.svg)](https://github.com/godly-raam/LedgerProbe/actions/workflows/ci.yml)
+[![LedgerProbe-Core CI](https://github.com/godly-raam/LedgerProbe/actions/workflows/ci.yml/badge.svg)](https://github.com/godly-raam/LedgerProbe/actions/workflows/ci.yml)
 
 **An automated authorization-logic, race-condition, and SIM-binding security harness for neobank architectures.**
 
-FinShield-Core is a self-contained lab. It ships an intentionally vulnerable parent–teen neobank API, a stateful fuzzer that proves the flaws with captured traffic, an Android attestation inspector, and a Next.js console that turns the JSON reports into an executive view, a permission graph, and side-by-side patches.
+LedgerProbe-Core is a self-contained lab. It ships an intentionally vulnerable parent–teen neobank API, a stateful fuzzer that proves the flaws with captured traffic, an Android attestation inspector, and a Next.js console that turns the JSON reports into an executive view, a permission graph, and side-by-side patches.
 
 **LedgerProbe** is the target-agnostic security automation engine in this repository. Its separate CLI consumes API specifications and YAML policies without importing bank-specific routes or login logic. The original lab fuzzer and dashboard report format remain compatible.
 
@@ -53,7 +53,7 @@ Four modules:
 ### Repository layout
 
 ```text
-finshield-core/
+LedgerProbe-core/
 ├── docker-compose.yml
 ├── README.md
 ├── ledgerprobe.py            # target-agnostic scan CLI
@@ -254,12 +254,12 @@ All accounts use password **`demo1234`** (lab only).
 
 | Account | Email | Role | Family | Wallet | Daily cap | Blocked MCCs |
 | --- | --- | --- | --- | --- | --- | --- |
-| Parent A | `parent.a@finshield.dev` | parent | A | — | — | — |
-| Teen A | `teen.a@finshield.dev` | teen | A | $120.00 | $50.00 | 7995 (gambling) |
-| Parent B | `parent.b@finshield.dev` | parent | B | — | — | — |
-| Teen B | `teen.b@finshield.dev` | teen | B | $500.00 | $200.00 | 7995, 7800 |
-| Merchant | `merchant@finshield.dev` | merchant | — | — | — | — |
-| Admin | `admin@finshield.dev` | admin | — | — | — | — |
+| Parent A | `parent.a@LedgerProbe.dev` | parent | A | — | — | — |
+| Teen A | `teen.a@LedgerProbe.dev` | teen | A | $120.00 | $50.00 | 7995 (gambling) |
+| Parent B | `parent.b@LedgerProbe.dev` | parent | B | — | — | — |
+| Teen B | `teen.b@LedgerProbe.dev` | teen | B | $500.00 | $200.00 | 7995, 7800 |
+| Merchant | `merchant@LedgerProbe.dev` | merchant | — | — | — | — |
+| Admin | `admin@LedgerProbe.dev` | admin | — | — | — | — |
 
 Known IDs: `usr_parent_a`, `usr_parent_b`, `usr_teen_a`, `usr_teen_b`. The SIM-rebind OTP is `246810`.
 
@@ -269,7 +269,7 @@ Known IDs: `usr_parent_a`, `usr_parent_b`, `usr_teen_a`, `usr_teen_b`. The SIM-r
 
 ## Vulnerability toggles
 
-[`mock-bank-api/config.json`](mock-bank-api/config.json) is read at startup. Override the path with `FINSHIELD_CONFIG` (the compose file mounts it read-only).
+[`mock-bank-api/config.json`](mock-bank-api/config.json) is read at startup. Override the path with `LedgerProbe_CONFIG` (the compose file mounts it read-only).
 
 | Toggle | Default | Vulnerable behavior when `true` | Fixed behavior when `false` |
 | --- | --- | --- | --- |
@@ -295,7 +295,7 @@ Start the API, then read Teen B's allowance while authenticated as Parent A:
 ```bash
 TOKEN=$(curl -s http://127.0.0.1:8000/api/v1/auth/login \
   -H 'content-type: application/json' \
-  -d '{"email":"parent.a@finshield.dev","password":"demo1234"}' | jq -r .access_token)
+  -d '{"email":"parent.a@LedgerProbe.dev","password":"demo1234"}' | jq -r .access_token)
 
 curl -s http://127.0.0.1:8000/api/v1/family/allowance/usr_teen_b \
   -H "Authorization: Bearer $TOKEN" | jq
@@ -447,7 +447,7 @@ Device mode requires `adb` and the optional Frida dependency:
 
 ```bash
 pip install -r requirements.txt
-python runner.py --serial emulator-5554 --package com.finshield.mockbank
+python runner.py --serial emulator-5554 --package com.LedgerProbe.mockbank
 ```
 
 [`scripts/sim_hook.js`](mobile-harness/scripts/sim_hook.js) hooks:
