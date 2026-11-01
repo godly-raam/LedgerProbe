@@ -1,7 +1,7 @@
 """Allowlist differential evidence before serializing it to CI reports."""
 import re
 
-_REASONS = {"leak_detected", "assertion_failed", "baseline_not_2xx", "baseline_timeout",
+_REASONS = {"unauthenticated_leak", "leak_detected", "assertion_failed", "baseline_not_2xx", "baseline_timeout", "baseline_missing_canary",
             "rate_limited", "server_error", "timeout", "not_reproducible", "ambiguous_2xx",
             "unexpected_status", "invalid_rule", "invalid_canary", "execution_error",
             "safety_blocked", "endpoint_absent", "invalid_control"}
@@ -20,7 +20,7 @@ def result_properties(result):
     if not isinstance(raw, dict):
         return properties
     evidence = {}
-    for key in ("overlap_count", "confirm_runs"):
+    for key in ("overlap_count", "confirm_runs", "pages_walked"):
         if type(raw.get(key)) is int and raw[key] >= 0:
             evidence[key] = raw[key]
     for key in ("canary_matched", "nonexistent_skipped"):

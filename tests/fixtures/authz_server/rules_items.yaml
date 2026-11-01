@@ -26,3 +26,4 @@ controls:
   nonexistent_object: true
   unauthenticated: true
 confirm: 2
+require_primary_canary: true

@@ -157,6 +157,13 @@ async def handle_object(request: Request) -> Response:
                 status_code=200,
             )
 
+    if base_profile == "unauth_leak_canary":
+        if identity is None:
+            return JSONResponse({"id": "obj-owner-1", "canary": "canary-secret-owner-9988"}, status_code=200)
+        if identity == "other":
+            return JSONResponse({"error": "forbidden"}, status_code=403)
+        return JSONResponse({"id": "obj-owner-1", "canary": "canary-secret-owner-9988"}, status_code=200)
+
     if base_profile == "generic_200_same_for_all":
         # Identical generic body for any id and any identity (including unauthenticated)
         return JSONResponse({"status": "ok", "service": "authz-service", "version": "1.0"}, status_code=200)
@@ -247,6 +254,8 @@ async def handle_object(request: Request) -> Response:
 
     # 3. Nonexistent object negative control dispatch
     if obj_id != "obj-owner-1":
+        if base_profile in {"public_endpoint", "generic_200_same_for_all"}:
+            return JSONResponse({"id": "pub-1", "title": "Public Guide", **SEEDED_DATA["static_fields"]}, status_code=200)
         if base_profile == "soft_deny_200_error_envelope":
             return JSONResponse({"error": {"code": "NOT_FOUND", "message": "Object not found"}}, status_code=200)
         if base_profile == "soft_deny_200_empty_object":
@@ -368,7 +377,7 @@ async def handle_items(request: Request) -> Response:
                 return JSONResponse(owner_items, status_code=200)
             return JSONResponse([], status_code=200)
 
-    if base_profile in ("soft_deny_200_empty_list", "bola_list_filter_fixed"):
+    if base_profile in ("soft_deny_200_empty_list", "bola_list_filter"):
         if identity == "owner" and owner_id == "user_owner":
             return JSONResponse(owner_items, status_code=200)
         return JSONResponse([], status_code=200)
@@ -384,12 +393,16 @@ async def handle_paginated(request: Request) -> Response:
     catalog_id = request.path_params.get("id")
     if catalog_id != "catalog-1":
         return JSONResponse({"error": "Catalog not found"}, status_code=404)
-    # The scan requests page 1 (or default). Owner canary item is located on page 2.
-    return JSONResponse({
-        "catalog_id": "catalog-1",
-        "page": 1,
-        "items": [{"id": "item-pub-header", "name": "Public Catalog"}],
-    }, status_code=200)
+    page = int(request.query_params.get("page", "1"))
+    if page == 2:
+        owner_item = {"id": "item-owner-2", "owner_id": "user_owner", "canary": "canary-secret-owner-9988"}
+        if identity == "owner":
+            return JSONResponse({"catalog_id": "catalog-1", "page": 2, "items": [owner_item]}, status_code=200)
+        if get_profile(request) == "paginated_list_page_2_fixed":
+            return JSONResponse({"error": "forbidden"}, status_code=403)
+        return JSONResponse({"catalog_id": "catalog-1", "page": 2, "items": [owner_item]}, status_code=200)
+    return JSONResponse({"catalog_id": "catalog-1", "page": page,
+                         "items": [{"id": "item-pub-header", "name": "Public Catalog"}]}, status_code=200)
 
 
 def create_app(profile: str | None = None, fixed: bool = False, timeout_delay: float = 0.2) -> Starlette:

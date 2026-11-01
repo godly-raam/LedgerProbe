@@ -104,6 +104,19 @@ def test_corpus_profile(profile_name: str, profile_spec: dict, tmp_path: Path):
         assert secret not in junit_content, f"Sensitive secret '{secret}' leaked in JUnit for {profile_name}"
 
 
+def test_fixed_list_has_owner_positive_baseline():
+    import httpx
+    async def check():
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=create_app(profile="bola_list_filter_fixed")),
+                                     base_url="http://authz.test") as client:
+            owner = await client.get("/api/v1/items?owner_id=user_owner", headers={"Authorization": "Bearer token-owner"})
+            other = await client.get("/api/v1/items?owner_id=user_owner", headers={"Authorization": "Bearer token-other"})
+        assert owner.status_code == 200 and owner.json()
+        assert owner.json()[0]["canary"] == "canary-secret-owner-9988"
+        assert other.status_code == 403 or other.json() == []
+    asyncio.run(check())
+
+
 def test_mutation_guard_catches_broken_overlap(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """Mutation test: breaking the engine's overlap logic causes a vulnerable corpus test to fail."""
     # Monkeypatch the engine's value extraction so overlap is always empty

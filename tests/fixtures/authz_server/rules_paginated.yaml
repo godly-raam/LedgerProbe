@@ -12,17 +12,15 @@ auth_contexts:
 parameters:
   path:
     id: "{{catalog_id}}"
-acceptable_status:
-  - 401
-  - 403
-  - 404
+acceptable_status: [401, 403, 404]
 leak_detection:
-  canaries:
-    - "{{canary_value}}"
+  canaries: ["{{canary_value}}"]
   min_unique_leaf_values: 5
-  ignore_fields:
-    - detail
+  ignore_fields: [detail]
 controls:
   nonexistent_object: true
   unauthenticated: true
 confirm: 2
+pagination:
+  param: page
+  max_pages: 2

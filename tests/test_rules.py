@@ -106,6 +106,23 @@ class LoadRulesTests(unittest.TestCase):
             with self.subTest(changes=changes), self.assertRaises(ValueError):
                 self.load(yaml.safe_dump(rule(**changes)))
 
+    def test_pagination_and_primary_canary_validation(self):
+        valid = rule()
+        valid.pop("assertions")
+        valid["leak_detection"] = {}
+        valid["pagination"] = {"param": "page", "max_pages": 2}
+        valid["require_primary_canary"] = True
+        self.load(yaml.safe_dump(valid))
+        for change in ({"pagination": {"param": "page", "max_pages": 0}},
+                       {"pagination": {"param": "bad.dot", "max_pages": 2}},
+                       {"require_primary_canary": "true"}):
+            broken = rule()
+            broken.pop("assertions")
+            broken["leak_detection"] = {}
+            broken.update(change)
+            with self.assertRaises(ValueError):
+                self.load(yaml.safe_dump(broken))
+
     def test_recursive_yaml_is_rejected(self):
         text = yaml.safe_dump(rule()) + "body: &loop\n  child: *loop\n"
         with self.assertRaises(ValueError):

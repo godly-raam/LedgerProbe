@@ -177,10 +177,10 @@ nondeterministic_leak:
   description: "Flaky leak that succeeds on 1st request but fails confirmation"
 
 generic_200_same_for_all:
-  category: tricky
-  expected_verdict: INCONCLUSIVE
-  expected_reason: invalid_control
-  expected_note: null
+  category: safe
+  expected_verdict: PASS
+  expected_reason: null
+  expected_note: public_endpoint
   rule_file: rules_objects.yaml
   description: "Identical public data also invalidates the negative control at the configured overlap threshold"
 
@@ -225,10 +225,34 @@ html_login_200:
   rule_file: rules_objects.yaml
   description: "200 with HTML login page instead of JSON"
 
+unauth_leak_canary:
+  category: vulnerable
+  expected_verdict: FAIL
+  expected_reason: unauthenticated_leak
+  expected_note: null
+  rule_file: rules_objects.yaml
+  description: "Unauthenticated control exposes the owner's configured canary"
+
 paginated_list_page_2:
+  category: vulnerable
+  expected_verdict: FAIL
+  expected_reason: leak_detected
+  expected_note: null
+  rule_file: rules_paginated.yaml
+  description: "Page two exposes the owner item to another identity"
+
+paginated_list_page_2_fixed:
+  category: safe
+  expected_verdict: PASS
+  expected_reason: null
+  expected_note: null
+  rule_file: rules_paginated.yaml
+  description: "Owner-positive page two denies the other identity with 403"
+
+paginated_list_page_2_unwalked:
   category: tricky
   expected_verdict: INCONCLUSIVE
   expected_reason: ambiguous_2xx
   expected_note: null
-  rule_file: rules_paginated.yaml
-  description: "Paginated list where owner item is on page 2"
+  rule_file: rules_paginated_one.yaml
+  description: "One-page scan cannot assess owner data only present on page two"

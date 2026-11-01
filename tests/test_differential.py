@@ -52,9 +52,9 @@ def scenario_handler(case):
             return httpx.Response(403 if case == "baseline" else 200, json=OWNER)
         if not actor:
             return httpx.Response(200 if case == "public" else 401,
-                                  json=OWNER if case == "public" else {"error": "auth required"})
+                                  json={"currency": "USD"} if case == "public" else {"error": "auth required"})
         if request.url.path != "/objects/object-a":
-            if case in {"cached", "static"}:
+            if case in {"cached", "static", "public"}:
                 return httpx.Response(200, json=OWNER if case == "cached" else {"currency": "USD"})
             return httpx.Response(404, json={"error": "absent"})
         forbidden_runs += 1
@@ -63,7 +63,7 @@ def scenario_handler(case):
         if case == "unstable" and forbidden_runs > 1:
             return httpx.Response(403)
         status = {"403": 403, "404": 404, "500": 500, "429": 429}.get(case, 200)
-        body = {"currency": "USD"} if case == "static" else {"error": "forbidden"} if case == "soft" else OWNER
+        body = {"currency": "USD"} if case in {"static", "public"} else {"error": "forbidden"} if case == "soft" else OWNER
         return httpx.Response(status, json=body, headers={"Retry-After": "0.01"} if status == 429 else {})
     return handler
 
@@ -87,7 +87,9 @@ def test_transport_scenarios(case, verdict, reason, note):
     if case == "bola":
         assert result["evidence"]["confirm_runs"] == 2
         assert len(requests) == 6  # baseline, forbidden, two controls, two confirms
-    if case in {"403", "404", "500", "429", "timeout"}:
+    if case in {"403", "404"}:
+        assert len(requests) == 4
+    if case in {"500", "429", "timeout"}:
         assert len(requests) == 2
     if case == "baseline":
         assert len(requests) == 1
@@ -240,6 +242,54 @@ def test_rate_limit_covers_controls_and_confirmations_and_429_cooldown():
             await client.get("https://target.test/after")
         assert timestamps[-1] - timestamps[-2] >= 0.025
     asyncio.run(execute())
+
+
+@pytest.mark.parametrize("unstable", [False, True])
+def test_anonymous_leak_confirms_anonymous_identity(unstable):
+    anonymous_runs = 0
+    def handler(request):
+        nonlocal anonymous_runs
+        actor = request.headers.get("X-Actor")
+        if actor == "owner":
+            return httpx.Response(200, json=OWNER)
+        if not actor:
+            anonymous_runs += 1
+            return httpx.Response(403 if unstable and anonymous_runs > 1 else 200, json=OWNER)
+        return httpx.Response(403, json={"error": "denied"})
+    selected = rule(leak_detection={"canaries": ["{{marker}}"]})
+    result, requests = scan(handler, selected, variables={"id": "object-a", "marker": "owner-marker"}, read_only=True)
+    assert (result["verdict"], result["reason"]) == (
+        ("INCONCLUSIVE", "not_reproducible") if unstable else ("FAIL", "unauthenticated_leak"))
+    assert anonymous_runs == 3
+    assert result["evidence"]["confirm_runs"] == 2
+    assert all(request.method == "GET" for request in requests)
+
+
+def test_pagination_requests_use_rate_limiter_and_read_only():
+    async def execute():
+        timestamps, pages = [], []
+        def handler(request):
+            timestamps.append(monotonic())
+            pages.append(request.url.params.get("page"))
+            if request.headers.get("X-Actor") == "owner":
+                return httpx.Response(200, json=OWNER)
+            return httpx.Response(403, json={"error": "denied"})
+        selected = rule(pagination={"param": "page", "max_pages": 2})
+        async with GuardedClient(max_rps=100, read_only=True, transport=httpx.MockTransport(handler)) as client:
+            result = (await run_rules(inventory(), [selected], client, CONTEXTS, {"id": "object-a"}))[0]
+        assert result["verdict"] == "PASS"
+        assert result["evidence"]["pages_walked"] == 2
+        assert pages == ["1"] * 4 + ["2"] * 4
+        assert all(b - a >= 0.008 for a, b in zip(timestamps, timestamps[1:]))
+    asyncio.run(execute())
+
+
+def test_required_owner_canary_rejects_vacuous_list():
+    selected = rule(require_primary_canary=True, leak_detection={"canaries": ["{{marker}}"]})
+    result, requests = scan(lambda request: httpx.Response(200, json=[]), selected,
+                            variables={"id": "object-a", "marker": "owner-marker"})
+    assert (result["verdict"], result["reason"]) == ("ERROR", "baseline_missing_canary")
+    assert len(requests) == 1
 
 
 def test_bundled_policy_and_legacy_copy_load_without_mutation():

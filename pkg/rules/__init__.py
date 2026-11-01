@@ -16,7 +16,7 @@ import httpx
 import yaml
 
 from ..guardrails import UnsafeRequest
-from .verdict import evaluate_differential
+from .verdict import _typed, _values, evaluate_differential
 
 __all__ = ["load_rules", "run_rules"]
 
@@ -88,10 +88,10 @@ def _validate_rules(rules):
     for rule in rules:
         _keys(rule, {"id", "name", "severity", "owasp_category", "cvss_score",
                      "target_endpoints", "auth_contexts", "assertions", "parameters", "body",
-                     "acceptable_status", "leak_detection", "controls", "confirm"},
+                     "acceptable_status", "leak_detection", "controls", "confirm", "pagination", "require_primary_canary"},
               {"id", "name", "severity", "owasp_category", "cvss_score", "target_endpoints"})
         differential = "leak_detection" in rule
-        if not differential and set(rule) & {"acceptable_status", "controls", "confirm"}:
+        if not differential and set(rule) & {"acceptable_status", "controls", "confirm", "pagination", "require_primary_canary"}:
             raise ValueError("Differential fields require leak_detection")
         if not differential and "assertions" not in rule:
             raise ValueError("Legacy rules require assertions")
@@ -192,6 +192,14 @@ def _validate_rules(rules):
                 raise ValueError("confirm must be an integer between 0 and 100")
             if set(auth) != {"primary", "forbidden"} or auth["primary"] == auth["forbidden"]:
                 raise ValueError("Differential rules require distinct primary and forbidden contexts")
+            pagination = rule.get("pagination")
+            if pagination is not None:
+                _keys(pagination, {"param", "max_pages"}, {"param", "max_pages"})
+                if (not isinstance(pagination["param"], str) or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]*", pagination["param"])
+                        or type(pagination["max_pages"]) is not int or not 1 <= pagination["max_pages"] <= 100):
+                    raise ValueError("pagination requires a parameter name and max_pages from 1 to 100")
+            if "require_primary_canary" in rule and type(rule["require_primary_canary"]) is not bool:
+                raise ValueError("require_primary_canary must be boolean")
 
 
 def load_rules(paths: Iterable[str]) -> list[dict[str, Any]]:
@@ -668,8 +676,10 @@ async def _differential_result(runtime, endpoint, inputs, forbidden, rule, basel
     baseline_record = _response_record(baseline)
     forbidden_record = await observe(inputs, forbidden)
     evaluate = {"baseline": baseline_record, "forbidden": forbidden_record, **comparison}
-    # Denials, overload and failed/unsupported responses need no extra traffic.
-    if not 200 <= forbidden_record.get("status", 0) < 300:
+    # Overload and unsupported statuses need no extra traffic. Accepted denials
+    # still run the unauthenticated control to detect public owner-data leaks.
+    status = forbidden_record.get("status", 0)
+    if not 200 <= status < 300 and status not in comparison["acceptable_status"]:
         return evaluate_differential(**evaluate)
     controls = {"nonexistent_object": True, "unauthenticated": True, **rule.get("controls", {})}
     nonexistent = unauthenticated = None
@@ -689,7 +699,7 @@ async def _differential_result(runtime, endpoint, inputs, forbidden, rule, basel
     confirmations = []
     if provisional["status"] == "failed":
         for _ in range(rule.get("confirm", 2)):
-            observation = await observe(inputs, forbidden)
+            observation = await observe(anonymous, None) if provisional.get("reason") == "unauthenticated_leak" else await observe(inputs, forbidden)
             confirmations.append(observation)
             # Stop on overload/timeouts; do not hammer an unhealthy target.
             if observation.get("error") or observation.get("status") == 429 or observation.get("status", 0) >= 500:
@@ -750,6 +760,9 @@ async def run_rules(inventory: dict, rules: list[dict], client,
                 runtime.headers(forbidden)
                 op = endpoint.get("operation_id")
                 inputs = await runtime.inputs(endpoint, rule, primary, (op,) if op else (), [0])
+                pagination = rule.get("pagination")
+                if pagination:
+                    inputs["query"][pagination["param"]] = 1
                 # Check forbidden required headers before sending even the baseline.
                 forbidden_headers = dict(inputs["headers"])
                 forbidden_headers.update({k.lower(): v for k, v in runtime.headers(forbidden).items()})
@@ -767,8 +780,44 @@ async def run_rules(inventory: dict, rules: list[dict], client,
                                     "error", "baseline_not_2xx")
                     runtime.remember(endpoint, baseline, primary)
                 if differential:
-                    result.update(await _differential_result(runtime, endpoint, inputs, forbidden,
-                                                             rule, baseline, comparison))
+                    if rule.get("require_primary_canary"):
+                        try:
+                            baseline_values = _values(_response_record(baseline), set(comparison["ignore_fields"]))
+                        except Exception:
+                            baseline_values = set()
+                        if not any(_typed(value) in baseline_values for value in comparison["canaries"]):
+                            raise _Stop("Primary baseline did not contain a required canary.", "error", "baseline_missing_canary")
+                    page_results = [await _differential_result(runtime, endpoint, inputs, forbidden,
+                                                               rule, baseline, comparison)]
+                    owner_pages = [bool({_typed(value) for value in comparison["canaries"]}
+                                        & _values(_response_record(baseline), set(comparison["ignore_fields"])))]
+                    if pagination:
+                        for page in range(2, pagination["max_pages"] + 1):
+                            page_inputs = {**inputs, "query": {**inputs["query"], pagination["param"]: page}}
+                            # Keep the shared missing-body sentinel by identity; deepcopy would turn it into JSON data.
+                            page_baseline = await runtime.request(endpoint, page_inputs, primary)
+                            if not 200 <= page_baseline.status_code < 300:
+                                page_results.append({"status": "error", "verdict": "ERROR", "reason": "baseline_not_2xx",
+                                                     "message": "Primary paginated baseline did not return 2xx."})
+                                break
+                            owner_pages.append(bool({_typed(value) for value in comparison["canaries"]}
+                                                    & _values(_response_record(page_baseline), set(comparison["ignore_fields"]))))
+                            page_results.append(await _differential_result(runtime, endpoint, page_inputs, forbidden,
+                                                                           rule, page_baseline, comparison))
+                    selected_result = next((item for item in page_results if item["status"] == "failed"), None)
+                    selected_result = selected_result or next((item for item in page_results if item["status"] == "error"), None)
+                    # Public-only pages cannot clear an unwalked scan. Once an owner-positive
+                    # page is tested, only its ambiguities (or other unhealthy pages) block PASS.
+                    owner_tested = any(owner_pages)
+                    selected_result = selected_result or next((item for index, item in enumerate(page_results)
+                        if item["status"] == "inconclusive" and not (
+                            pagination and owner_tested and not owner_pages[index]
+                            and item.get("reason") == "ambiguous_2xx")), None)
+                    selected_result = selected_result or next((item for item in page_results if item["status"] == "passed"), page_results[0])
+                    if pagination:
+                        selected_result = {**selected_result, "evidence": {**selected_result.get("evidence", {}),
+                                                                              "pages_walked": len(page_results)}}
+                    result.update(selected_result)
                 else:
                     response = await runtime.request(endpoint, inputs, forbidden)
                     details = _assertions(response, rule["assertions"], variables)

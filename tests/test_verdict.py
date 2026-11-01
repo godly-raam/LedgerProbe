@@ -38,7 +38,9 @@ def evaluate(**overrides):
       "nonexistent": observation(body={"error": "absent"})}, "PASS", None, "soft_deny"),
     ({"baseline": observation(body=GENERIC), "forbidden": observation(body={"currency": "USD"}),
       "nonexistent": observation(body={"currency": "USD"})}, "PASS", None, "soft_deny"),
-    ({"unauthenticated": observation(body=dict(reversed(list(OWNER.items()))))}, "PASS", None, "public_endpoint"),
+    ({"baseline": observation(body=GENERIC), "forbidden": observation(body=GENERIC),
+      "unauthenticated": observation(body=dict(reversed(list(GENERIC.items())))),
+      "nonexistent": observation(body=GENERIC)}, "PASS", None, "public_endpoint"),
     ({"forbidden": observation(500)}, "INCONCLUSIVE", "server_error", None),
     ({"forbidden": observation(429)}, "INCONCLUSIVE", "rate_limited", None),
     ({"forbidden": {"error": "timeout"}}, "INCONCLUSIVE", "timeout", None),
@@ -92,12 +94,6 @@ def test_accepted_denial_remains_pass_with_invalid_control(status):
     assert result.get("reason") is None
 
 
-@pytest.mark.parametrize("canaries", [[], ["owner-only-marker"]])
-def test_invalid_control_prevents_public_endpoint_pass(canaries):
-    result = evaluate(nonexistent=observation(body=GENERIC), unauthenticated=observation(body=OWNER),
-                      canaries=canaries)
-    assert (result["verdict"], result["reason"]) == ("INCONCLUSIVE", "invalid_control")
-    assert result.get("note") is None
 
 
 def test_independent_owner_canary_proves_leak_despite_invalid_control():
@@ -124,6 +120,21 @@ def test_ignored_control_leaves_do_not_invalidate_control():
                       canaries=["owner-only-marker"], min_unique_leaf_values=99, ignore_fields=["label"])
     assert result["reason"] == "ambiguous_2xx"
     assert result["evidence"]["canary_matched"] is False
+
+
+def test_unauthenticated_owner_canary_is_failure_before_public_classification():
+    result = evaluate(forbidden=observation(403), unauthenticated=observation(body=OWNER),
+                      nonexistent=observation(404, {"error": "missing"}))
+    assert (result["verdict"], result["reason"]) == ("FAIL", "unauthenticated_leak")
+
+
+def test_unauthenticated_unique_overlap_requires_valid_nonexistent_control():
+    result = evaluate(forbidden=observation(403), unauthenticated=observation(body=OWNER),
+                      nonexistent=observation(404, {"error": "missing"}), canaries=[])
+    assert (result["verdict"], result["reason"]) == ("FAIL", "unauthenticated_leak")
+    result = evaluate(forbidden=observation(403), unauthenticated=observation(body=OWNER),
+                      nonexistent=observation(body=OWNER), canaries=[])
+    assert result["verdict"] != "FAIL"
 
 
 def test_ignore_subtrees_and_distinct_typed_values():

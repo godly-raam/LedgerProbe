@@ -209,13 +209,15 @@ confirm: 2
 
 | Field | Required / type | Exact meaning |
 | --- | --- | --- |
-| `acceptable_status` | Optional nonempty list of unique integer `400..499` statuses, excluding `429`. Default: `[401, 403, 404]`. | An initial forbidden response in this deny set is **PASS**, without control or confirmation requests. `404` is a valid hide-existence pattern. Overload/success statuses cannot be configured as denials. |
+| `acceptable_status` | Optional nonempty list of unique integer `400..499` statuses, excluding `429`. Default: `[401, 403, 404]`. | An initial forbidden response in this deny set is **PASS** unless the unauthenticated control proves an owner-data leak. Controls still execute; denials alone need no confirmations. `404` is a valid hide-existence pattern. Overload/success statuses cannot be configured as denials. |
 | `leak_detection` | Mapping; its presence opts into differential evaluation. | May contain only `canaries`, `min_unique_leaf_values`, and `ignore_fields`. Cannot be combined with legacy `assertions`. Other differential fields without this block are rejected. |
 | `leak_detection.canaries` | Optional list of unique nonempty strings/templates. Default: `[]`. | Templates resolve from input `variables` using normal placeholder resolution and may yield any scalar JSON value, never an object/array. These are comparison **values**, not response-field paths. Supply values known to occur only in the owner's object. A canary counts only if found in the baseline, not ignored, and absent from the nonexistent response. |
 | `leak_detection.min_unique_leaf_values` | Optional positive integer. Default: `2`. | Minimum distinct scalar values shared by primary and forbidden JSON responses **after subtracting** every value also seen in the nonexistent response. Repeated leaves count once; boolean/number types remain distinct. Any single qualifying canary independently satisfies the leak criterion. |
 | `leak_detection.ignore_fields` | Optional list of unique nonempty dot paths. Default: `[]`. | Excludes matching subtrees from **all** comparisons, including overlap, canaries, public equality, and soft-deny shape. Paths use object keys and zero-based array indexes, e.g. `metadata.request_id`, `rows.0.timestamp`. No wildcard/JSONPath syntax. |
 | `controls` | Optional mapping containing only booleans `nonexistent_object` and `unauthenticated`. | When `leak_detection` is present, both controls default to `true`; omitted keys also default to `true`. |
-| `confirm` | Optional integer in `[0, 100]` (booleans rejected). Default: `2`. | Additional identical forbidden requests for a would-be FAIL only. Every repeat must reproduce stable owner-specific evidence. `0` disables repeats; the upper bound prevents accidental unbounded traffic. PASS and ambiguous outcomes are not repeated. |
+| `confirm` | Optional integer in `[0, 100]` (booleans rejected). Default: `2`. | Additional identical requests with the leaking identity (forbidden or unauthenticated) for a would-be FAIL only. Every repeat must reproduce stable owner-specific evidence. `0` disables repeats; the upper bound prevents accidental unbounded traffic. PASS and ambiguous outcomes are not repeated. |
+| `pagination` | Optional `{param: string, max_pages: 1..100}`. | Sets integer query values `1..max_pages`; every page uses the guarded client and is independently evaluated. Any FAIL takes priority, then ERROR. Ambiguous pages without an owner canary do not block PASS after an owner-canary-positive page has been tested successfully; other inconclusives remain. Without such a page, ambiguity stays INCONCLUSIVE. This is bounded page-number traversal, not cursor/link discovery. |
+| `require_primary_canary` | Optional boolean, default `false`. | Requires the initial primary response to contain a configured canary; otherwise ERROR `baseline_missing_canary`. Use for list/profile checks that must prove the owner sees a non-empty owned result. |
 
 The runner resolves canaries before any selected-target HTTP. Both named
 `primary` and `forbidden` contexts are required and must have different names.
@@ -228,16 +230,15 @@ only an explicit qualifying canary can establish a leak, at reduced confidence.
 A JSON nonexistent-object control is **invalid** when it returns 2xx and either
 shares at least `min_unique_leaf_values` distinct scalar values with the primary
 baseline or contains any configured canary, after `ignore_fields` exclusions.
-It must not subtract values from owner/forbidden overlap, establish a soft deny,
-or permit a public-endpoint PASS. An initial forbidden status in
+It must not subtract values from owner/forbidden overlap or establish a soft deny. An initial forbidden status in
 `acceptable_status` still yields PASS. For forbidden 2xx, invalid control yields
 INCONCLUSIVE with reason `invalid_control`, except that an explicit owner canary
 present in the baseline and forbidden response but **absent from the control**
 can independently establish FAIL, with reduced confidence and the usual
 confirmation requirement. A canary also exposed by the control is not
-owner-specific evidence; identical unauthenticated data cannot establish an
-authorization leak. `invalid_control` deliberately takes precedence over
-`public_endpoint` and `soft_deny` classification, not merely over overlap scoring.
+owner-specific evidence. Identical public data may establish `public_endpoint`
+only without owner-specific evidence or a canary in the invalid control;
+an invalid owner-like control otherwise remains `invalid_control`.
 
 ### Controls, read-only operation, and confirmation
 
@@ -252,7 +253,7 @@ path/query/body inputs; neither forbidden nor control responses update state.
 | Control | Behavior |
 | --- | --- |
 | `nonexistent_object` | Replays the forbidden identity with a generated candidate ID. Supports one unambiguous path/query `id` or `*_id` parameter (otherwise a single path parameter), schema-declared UUID/string/integer types, bounds, and supported string patterns. Multiple IDs, unknown/unsupported types, enums, or unsatisfied constraints skip the control and reduce confidence. UUIDs/integers are randomized; string candidates preserve existing length/separators or known prefixes and are checked against the pattern. Candidates cannot be proven absent; only values from a valid control are treated as shared. Owner-like 2xx controls produce `invalid_control` as described above. Non-JSON control bodies are not usable subtraction evidence. |
-| `unauthenticated` | Replays the original request with no context headers, `auth=None`, and an empty Cookie header to prevent cookie-jar reuse. An unauthenticated 2xx with identical JSON paths/typed values (after ignoring fields) yields PASS with note `public_endpoint`. This classifies public exposure, not whether public access itself is desirable. |
+| `unauthenticated` | Replays the original request with no context headers, `auth=None`, and an empty Cookie header to prevent cookie-jar reuse. A 2xx containing an owner canary, or sufficient baseline overlap with a valid nonexistent control, is FAIL `unauthenticated_leak` even if the authenticated forbidden request was denied. `public_endpoint` PASS requires identical unauthenticated/forbidden data **and no owner-specific evidence**. |
 
 A would-be FAIL requires `confirm` additional observations. Every repeat must
 retain a qualifying original canary or all original overlap values (with at
@@ -270,18 +271,19 @@ has a machine-readable `reason`. PASS annotations use `note`, not `reason`.
 
 | Verdict | Reason code | Exact outcome |
 | --- | --- | --- |
-| `PASS` | — | Forbidden response is in `acceptable_status`; no body-leak analysis on an accepted denial. |
-| `PASS` | note: `public_endpoint` | Unauthenticated 2xx has identical JSON data to the forbidden response. |
+| `PASS` | — | Forbidden response is in `acceptable_status` and controls show no anonymous owner-data leak. |
+| `PASS` | note: `public_endpoint` | Unauthenticated 2xx has identical JSON data to the forbidden response, without owner-specific evidence. |
 | `PASS` | note: `soft_deny` | Forbidden 2xx has the same JSON paths/types as the nonexistent response, without leak evidence (values may differ). |
 | `FAIL` | `leak_detected` | Forbidden 2xx has a unique owner canary or sufficient unique overlap, and all configured repeats reproduce stable evidence. |
+| `FAIL` | `unauthenticated_leak` | The unauthenticated control exposes an owner canary or enough owner-specific baseline overlap with a valid nonexistent control. |
 | `INCONCLUSIVE` | `rate_limited` | Forbidden/control/confirmation response is 429. |
 | `INCONCLUSIVE` | `server_error` | Forbidden/control/confirmation response is 5xx. |
 | `INCONCLUSIVE` | `timeout` | Forbidden/control/confirmation request times out. |
 | `INCONCLUSIVE` | `not_reproducible` | Candidate evidence does not reproduce on every required confirmation. |
 | `INCONCLUSIVE` | `ambiguous_2xx` | Successful response is neither public nor a soft deny and has insufficient unique leak evidence. |
-| `INCONCLUSIVE` | `invalid_control` | Nonexistent-object control returns owner-like 2xx data or a canary; no independent, reproducible owner canary can prove a leak. No soft-deny/public PASS is permitted. |
+| `INCONCLUSIVE` | `invalid_control` | Nonexistent-object control returns owner-like 2xx data or a canary; no independent, reproducible owner canary can prove a leak. No soft-deny PASS is permitted; public classification requires no owner-specific evidence or control canary. |
 | `INCONCLUSIVE` | `unexpected_status` | Forbidden response is neither 2xx nor an accepted denial/overload status (e.g. redirect). |
-| `ERROR` | `baseline_not_2xx` / `baseline_timeout` | Primary baseline failed; no forbidden request is sent. |
+| `ERROR` | `baseline_not_2xx` / `baseline_timeout` / `baseline_missing_canary` | Primary baseline failed, timed out, or lacked required owner evidence. |
 | `ERROR` | `execution_error` / `invalid_canary` | Resolution/context/transport problem, or canary resolves to a non-scalar. |
 | legacy `FAIL` | `assertion_failed` | Legacy assertions did not all match; no differential traffic is added. |
 | existing `SKIPPED` | `safety_blocked` / `endpoint_absent` | Guard blocked a request, or selected endpoint is absent. |
