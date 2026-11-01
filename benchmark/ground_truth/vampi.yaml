@@ -1,0 +1,170 @@
+# Source-derived ground truth for erev0s/VAmPI.
+#
+# Labels were written from the target's own README and source code, before
+# LedgerProbe was run against it. No LedgerProbe output was consulted.
+#
+# Upstream snapshot:
+#   repository: https://github.com/erev0s/VAmPI
+#   commit:     f16052dce83f05847133ec98f01c5193a41de7d8 (2026-04-07)
+#   image:      erev0s/vampi@sha256:0a5a224b6e14ae7da6a6ea265178ff71286ff903aec74adee98f660bb0e4ca12
+#
+# VAmPI exposes one global `vulnerable=1|0` switch. `vulnerable=0` fixes the
+# book-secret and password-update object checks, but the README explicitly warns
+# that some functionality remains vulnerable. The user list/debug/read-by-name
+# endpoints below stay unauthenticated in both modes.
+
+target: vampi
+title: VAmPI
+upstream:
+  repository: https://github.com/erev0s/VAmPI
+  commit: f16052dce83f05847133ec98f01c5193a41de7d8
+  image: erev0s/vampi@sha256:0a5a224b6e14ae7da6a6ea265178ff71286ff903aec74adee98f660bb0e4ca12
+
+instances:
+  vulnerable:
+    description: VAmPI with `vulnerable=1` (the upstream Dockerfile default).
+    env:
+      vulnerable: "1"
+      tokentimetolive: "3600"
+  secure:
+    description: VAmPI with `vulnerable=0` (the upstream secure toggle).
+    env:
+      vulnerable: "0"
+      tokentimetolive: "3600"
+
+cases:
+  - rule_id: vampi-books-object
+    instance: vulnerable
+    method: GET
+    path: /books/v1/{book_title}
+    label: vulnerable
+    source: "api_views/books.py:50-58"
+    rationale: >-
+      The vulnerable branch looks a book up by title only and returns its
+      `secret` and `owner` to any authenticated caller, without comparing the
+      JWT subject with `book.user_id`. README lists Broken Object Level
+      Authorization as an intended vulnerability.
+
+  - rule_id: vampi-users-password
+    instance: vulnerable
+    method: PUT
+    path: /users/v1/{username}/password
+    label: vulnerable
+    source: "api_views/users.py:186-192"
+    rationale: >-
+      The vulnerable branch updates the password of the username in the path,
+      not the JWT subject. README lists "Unauthorized Password Change".
+
+  - rule_id: vampi-users-object
+    instance: vulnerable
+    method: GET
+    path: /users/v1/{username}
+    label: vulnerable
+    source: "api_views/users.py:45-49; models/user_model.py:55-56,70-81"
+    rationale: >-
+      No token validation is performed; any anonymous caller receives the
+      selected user's username and email. This is an unauthenticated IDOR /
+      excessive data exposure, not merely a public profile: email is the only
+      identity field and is used for login enumeration.
+
+  - rule_id: vampi-users-list
+    instance: vulnerable
+    method: GET
+    path: /users/v1
+    label: vulnerable
+    source: "api_views/users.py:19-21; models/user_model.py:62-63"
+    rationale: >-
+      No authentication is required and the response contains every user's
+      email address. README lists "User and Password Enumeration" and
+      "Excessive Data Exposure".
+
+  - rule_id: vampi-users-debug
+    instance: vulnerable
+    method: GET
+    path: /users/v1/_debug
+    label: vulnerable
+    source: "api_views/users.py:24-26; models/user_model.py:58-59,65-67"
+    rationale: >-
+      Unauthenticated debug endpoint returns every user's username, password,
+      email and admin flag. README lists "Excessive Data Exposure through debug
+      endpoint" and warns the debug endpoint remains vulnerable in secure mode.
+
+  - rule_id: vampi-home
+    instance: vulnerable
+    method: GET
+    path: /
+    label: safe
+    source: "api_views/main.py:14-18"
+    rationale: >-
+      Public, static service banner; it contains no user or object data and is
+      safe for any caller.
+
+  - rule_id: vampi-book-list
+    instance: vulnerable
+    method: GET
+    path: /books/v1
+    label: safe
+    source: "api_views/books.py:12-14; models/books_model.py:23-24"
+    rationale: >-
+      Public catalog of book titles and owners. The secret content is not
+      serialised by `Book.json`; README restricts only the secret to its owner.
+
+  - rule_id: vampi-me
+    instance: vulnerable
+    method: GET
+    path: /me
+    label: safe
+    source: "api_views/users.py:28-42"
+    rationale: >-
+      Returns only the profile selected by the validated JWT subject; there is
+      no user-controlled object identifier.
+
+  - rule_id: vampi-books-object
+    instance: secure
+    method: GET
+    path: /books/v1/{book_title}
+    label: safe
+    source: "api_views/books.py:61-73"
+    rationale: >-
+      With `vulnerable=0` the lookup is constrained by the JWT user, so another
+      user's title yields 404 and the owner still receives their own book.
+
+  - rule_id: vampi-users-password
+    instance: secure
+    method: PUT
+    path: /users/v1/{username}/password
+    label: safe
+    source: "api_views/users.py:193-196"
+    rationale: >-
+      With `vulnerable=0` the update always targets the JWT subject, ignoring
+      the username in the path; another user's password is not changed.
+
+  - rule_id: vampi-users-object
+    instance: secure
+    method: GET
+    path: /users/v1/{username}
+    label: vulnerable
+    source: "api_views/users.py:45-49"
+    rationale: >-
+      The secure switch does not add authentication to this handler; any
+      anonymous caller still reads another user's email. The README warns that
+      the secure mode is not a complete fix.
+
+  - rule_id: vampi-users-list
+    instance: secure
+    method: GET
+    path: /users/v1
+    label: vulnerable
+    source: "api_views/users.py:19-21"
+    rationale: >-
+      Still unauthenticated in secure mode; every user's email is returned.
+
+  - rule_id: vampi-users-debug
+    instance: secure
+    method: GET
+    path: /users/v1/_debug
+    label: vulnerable
+    source: "api_views/users.py:24-26; app.py:4-7"
+    rationale: >-
+      The debug endpoint is not gated by the `vulnerable` switch; app.py's own
+      comment says the debug endpoint remains vulnerable when the switch is 0.

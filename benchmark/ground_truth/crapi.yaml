@@ -1,0 +1,141 @@
+# Source-derived ground truth for OWASP crAPI.
+#
+# Labels were written from the target's own docs, OpenAPI document and service
+# source, before LedgerProbe was run against it. No LedgerProbe output was
+# consulted.
+#
+# Upstream snapshot:
+#   repository: https://github.com/OWASP/crAPI
+#   source:     checked-out tree in benchmark/.out/crapi-source, VERSION 1.1.5
+#   images:     crapi/*:1.1.6 (the closest published tag; 1.1.5 images are not
+#               published on Docker Hub). This source/image skew is recorded as
+#               a benchmark limitation; the crAPI target was not executed in
+#               this environment because the Docker socket is unavailable.
+#
+# Only read-only endpoints are labelled so the legacy and differential rule
+# sets exercise the same surface. crAPI has no global secure/fixed mode.
+
+target: crapi
+title: OWASP crAPI
+upstream:
+  repository: https://github.com/OWASP/crAPI
+  source_version: "1.1.5"
+  image_tag: "1.1.6"
+  openapi: openapi-spec/crapi-openapi-spec.json
+
+instances:
+  default:
+    description: Single crAPI deployment; no secure/fixed toggle is provided.
+    base_url: http://127.0.0.1:8888
+
+cases:
+  - rule_id: crapi-vehicle-location
+    instance: default
+    method: GET
+    path: /identity/api/v2/vehicle/{vehicleId}/location
+    label: vulnerable
+    source: "docs/challenges.md:17-23; services/identity/src/main/java/com/crapi/controller/VehicleController.java:108-114; services/identity/src/main/java/com/crapi/service/Impl/VehicleServiceImpl.java:145-164"
+    rationale: >-
+      Documented BOLA challenge 1: the location endpoint receives a vehicle UUID
+      and VehicleServiceImpl returns the owner's name, email and location
+      without comparing the JWT subject to the vehicle owner.
+
+  - rule_id: crapi-mechanic-report
+    instance: default
+    method: GET
+    path: /workshop/api/mechanic/mechanic_report
+    label: vulnerable
+    source: "docs/challenges.md:25-33; services/workshop/crapi/mechanic/views.py:223-244"
+    rationale: >-
+      Documented BOLA challenge 2: GetReportView fetches
+      ServiceRequest.objects.filter(id=report_id).first() and serialises it
+      without checking that the report's vehicle belongs to the caller.
+
+  - rule_id: crapi-order-object
+    instance: default
+    method: GET
+    path: /workshop/api/shop/orders/{order_id}
+    label: vulnerable
+    source: "services/workshop/crapi/shop/views.py:109-165"
+    rationale: >-
+      OrderControlView.get has no @jwt_auth_required and no ownership check; it
+      loads the order by numeric id and returns the order plus the owner's user
+      details. This is a source-derived BOLA/IDOR, independent of the published
+      challenge list.
+
+  - rule_id: crapi-community-recent
+    instance: default
+    method: GET
+    path: /community/api/v2/community/posts/recent
+    label: vulnerable
+    source: "docs/challenges.md:45-49; docs/challengeSolutions.md:22-23; services/community/api/models/post.go:36,79-80,114-130"
+    rationale: >-
+      The public recent-posts feed serialises each author's VehicleID (and email
+      in the author object). The official solution uses this feed to obtain
+      another user's vehicle UUID for the BOLA challenge. It is an
+      excessive-data-exposure / IDOR-enabling endpoint rather than a denial
+      check.
+
+  - rule_id: crapi-service-requests-vin
+    instance: default
+    method: GET
+    path: /workshop/api/merchant/service_requests/{vin}
+    label: vulnerable
+    source: "services/workshop/crapi/merchant/views.py:157-180"
+    rationale: >-
+      UserServiceRequestsView.get has no authentication decorator and filters
+      only by the VIN in the path, so an anonymous caller who knows a VIN can
+      read that vehicle's service requests. This is a source-derived
+      unauthenticated IDOR.
+
+  - rule_id: crapi-dashboard
+    instance: default
+    method: GET
+    path: /identity/api/v2/user/dashboard
+    label: safe
+    source: "services/identity/src/main/java/com/crapi/controller/UserController.java:43-44; services/identity/src/main/java/com/crapi/service/Impl/UserServiceImpl.java:199-229"
+    rationale: >-
+      Dashboard data is selected from the validated JWT subject
+      (userService.getUserFromToken); there is no caller-supplied object id.
+
+  - rule_id: crapi-vehicles
+    instance: default
+    method: GET
+    path: /identity/api/v2/vehicle/vehicles
+    label: safe
+    source: "services/identity/src/main/java/com/crapi/service/Impl/VehicleServiceImpl.java:115-133"
+    rationale: >-
+      Vehicle list is constrained by
+      vehicleDetailsRepository.findAllByOwner_id(user.getId()) using the JWT
+      subject.
+
+  - rule_id: crapi-orders-all
+    instance: default
+    method: GET
+    path: /workshop/api/shop/orders/all
+    label: safe
+    source: "services/workshop/crapi/shop/views.py:267-294"
+    rationale: >-
+      OrderDetailsView.get filters Order.objects.filter(user=user), so a caller
+      can only list their own orders.
+
+  - rule_id: crapi-products
+    instance: default
+    method: GET
+    path: /workshop/api/shop/products
+    label: safe
+    source: "services/workshop/crapi/shop/views.py:52-80"
+    rationale: >-
+      Public shop catalog of products and prices; it contains no per-user
+      object data.
+
+  - rule_id: crapi-video-object
+    instance: default
+    method: GET
+    path: /identity/api/v2/user/videos/{video_id}
+    label: safe
+    source: "services/identity/src/main/java/com/crapi/service/Impl/ProfileServiceImpl.java:122-133"
+    rationale: >-
+      getProfileVideo loads the video owned by the JWT subject and returns it
+      only when its id equals the requested id; otherwise it returns 404. A
+      caller cannot read another user's video by changing the path id.
