@@ -1,0 +1,488 @@
+#!/usr/bin/env python3
+"""Local-only precision/recall harness for LedgerProbe.
+
+Every target URL is checked before a socket is opened. Only loopback and
+RFC1918/Docker-internal addresses are accepted; public names and IPs hard-fail.
+"""
+
+from __future__ import annotations
+
+import argparse
+import ipaddress
+import json
+import os
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.request
+import xml.etree.ElementTree as ET
+from collections import Counter
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Iterable
+from urllib.parse import urlsplit
+
+import yaml
+
+ROOT = Path(__file__).resolve().parent.parent
+BENCH = ROOT / "benchmark"
+TARGETS_DIR = BENCH / "targets"
+GROUND_TRUTH = BENCH / "ground_truth"
+DEFAULT_OUT = BENCH / ".out"
+
+LOOPBACK_NAMES = {"localhost", "127.0.0.1", "::1", "0:0:0:0:0:0:0:1"}
+DOCKER_NETWORKS = (
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+)
+
+
+class UnsafeTarget(ValueError):
+    """The requested target is not a local benchmark target."""
+
+
+class Blocked(RuntimeError):
+    """A target could not be executed in this environment."""
+
+
+def validate_target_url(url: str, *, allow_docker_internal: bool = False,
+                        docker_hosts: Iterable[str] = ()) -> str:
+    """Return *url* if it is loopback (or an explicitly allowed Docker host).
+
+    Raises UnsafeTarget for public hosts, link-local/metadata addresses,
+    credential-bearing URLs, non-HTTP schemes and malformed ports. This is the
+    only place the benchmark decides that a network destination is in scope.
+    """
+    if not isinstance(url, str) or not url.strip():
+        raise UnsafeTarget("target URL is empty")
+    parsed = urlsplit(url.strip())
+    if parsed.scheme not in {"http", "https"}:
+        raise UnsafeTarget(f"target scheme must be http/https: {parsed.scheme!r}")
+    if parsed.username is not None or parsed.password is not None:
+        raise UnsafeTarget("target URL must not contain credentials")
+    if parsed.fragment:
+        raise UnsafeTarget("target URL must not contain a fragment")
+    if not parsed.hostname:
+        raise UnsafeTarget("target URL has no hostname")
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise UnsafeTarget("target URL has an invalid port") from exc
+    if port is not None and not 1 <= port <= 65535:
+        raise UnsafeTarget("target port must be between 1 and 65535")
+
+    host = parsed.hostname.rstrip(".").lower()
+    if host in LOOPBACK_NAMES:
+        return url.strip()
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        allowed = {name.rstrip(".").lower() for name in docker_hosts}
+        if allow_docker_internal and host in allowed:
+            return url.strip()
+        raise UnsafeTarget(f"host {host!r} is not loopback or an allowed Docker host")
+    if address.is_loopback:
+        return url.strip()
+    if allow_docker_internal and any(address in network for network in DOCKER_NETWORKS):
+        return url.strip()
+    raise UnsafeTarget(f"address {address} is not loopback or Docker-internal")
+
+
+@dataclass
+class Target:
+    name: str
+    ground_truth: Path
+    spec: Path
+    compose: Path
+    setup: Path
+    rules_legacy: Path
+    rules_differential: Path
+    instances: dict[str, str]
+    read_only: bool
+    docker_hosts: tuple[str, ...] = ()
+    env: dict[str, str] = field(default_factory=dict)
+
+
+TARGETS: dict[str, Target] = {
+    "vampi": Target(
+        name="vampi",
+        ground_truth=GROUND_TRUTH / "vampi.yaml",
+        spec=TARGETS_DIR / "vampi" / "openapi.json",
+        compose=TARGETS_DIR / "vampi" / "compose.yaml",
+        setup=TARGETS_DIR / "vampi" / "setup.py",
+        rules_legacy=TARGETS_DIR / "vampi" / "rules_legacy.yaml",
+        rules_differential=TARGETS_DIR / "vampi" / "rules_differential.yaml",
+        instances={
+            "vulnerable": "http://127.0.0.1:5002",
+            "secure": "http://127.0.0.1:5001",
+        },
+        read_only=False,
+    ),
+    "crapi": Target(
+        name="crapi",
+        ground_truth=GROUND_TRUTH / "crapi.yaml",
+        spec=TARGETS_DIR / "crapi" / "openapi.json",
+        compose=TARGETS_DIR / "crapi" / "compose.yaml",
+        setup=TARGETS_DIR / "crapi" / "setup.py",
+        rules_legacy=TARGETS_DIR / "crapi" / "rules_legacy.yaml",
+        rules_differential=TARGETS_DIR / "crapi" / "rules_differential.yaml",
+        instances={"default": "http://127.0.0.1:8888"},
+        read_only=True,
+        docker_hosts=("crapi-identity", "crapi-community", "crapi-workshop", "crapi-web"),
+        env={"VERSION": "1.1.6", "LISTEN_IP": "127.0.0.1", "TLS_ENABLED": "false"},
+    ),
+}
+
+
+def _run(cmd: list[str], *, cwd: Path | None = None, env: dict[str, str] | None = None,
+         timeout: int = 180, check: bool = True,
+         allow_findings: bool = False) -> subprocess.CompletedProcess[str]:
+    completed = subprocess.run(cmd, cwd=str(cwd or ROOT), env=env, capture_output=True,
+                               text=True, timeout=timeout)
+    allowed = {0, 1} if allow_findings else {0}
+    if check and completed.returncode not in allowed:
+        detail = (completed.stderr or completed.stdout or "").strip()[-2000:]
+        raise Blocked(f"{' '.join(cmd[:4])} failed ({completed.returncode}): {detail}")
+    return completed
+
+
+def docker_available() -> bool:
+    try:
+        return subprocess.run(["docker", "info"], capture_output=True, timeout=10).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def compose_command() -> list[str]:
+    for candidate in (["docker", "compose"], ["docker-compose"]):
+        try:
+            result = subprocess.run(candidate + ["version"], capture_output=True, timeout=10)
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if result.returncode == 0:
+            return candidate
+    raise Blocked("Docker Compose v2 is not installed or not on PATH")
+
+
+def _http_ready(url: str, timeout: float = 120.0) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            with urllib.request.urlopen(url, timeout=2) as response:
+                if 200 <= response.status < 500:
+                    return True
+        except (urllib.error.URLError, TimeoutError, OSError):
+            time.sleep(1)
+    return False
+
+
+def compose_up(target: Target, out: Path) -> None:
+    cmd = compose_command() + [
+        "-f", str(target.compose), "-p", f"ledgerprobe-{target.name}",
+        "up", "-d", "--wait",
+    ]
+    env = os.environ.copy()
+    env.update({"LISTEN_IP": "127.0.0.1", **target.env})
+    _run(cmd, env=env, timeout=600)
+    for name, url in target.instances.items():
+        if not _http_ready(url):
+            raise Blocked(f"{target.name}/{name} did not answer at {url}")
+
+
+def compose_down(target: Target) -> None:
+    cmd = compose_command() + ["-f", str(target.compose), "-p", f"ledgerprobe-{target.name}",
+                               "down", "-v", "--remove-orphans"]
+    try:
+        _run(cmd, timeout=180, check=False)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        print(f"[!] compose down failed: {exc}", file=sys.stderr)
+
+
+def _load_cases(path: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    document = yaml.safe_load(path.read_text(encoding="utf-8"))
+    if not isinstance(document, dict) or not isinstance(document.get("cases"), list):
+        raise ValueError(f"{path}: ground truth must contain a cases list")
+    ids = set()
+    for case in document["cases"]:
+        if not isinstance(case, dict) or case.get("label") not in {"vulnerable", "safe"}:
+            raise ValueError(f"{path}: invalid ground-truth case")
+        for key in ("rule_id", "instance", "method", "path", "label", "source"):
+            if not case.get(key):
+                raise ValueError(f"{path}: case missing {key}")
+        identity = (case["instance"], case["rule_id"])
+        if identity in ids:
+            raise ValueError(f"{path}: duplicate case {identity}")
+        ids.add(identity)
+    return document, document["cases"]
+
+
+def _junit_results(path: Path) -> dict[str, dict[str, str | None]]:
+    if not path.exists():
+        return {}
+    root = ET.parse(path).getroot()
+    results: dict[str, dict[str, str | None]] = {}
+    for case in root.findall("testcase"):
+        rule_id = case.get("classname") or ""
+        properties = {
+            item.get("name", "").removeprefix("ledgerprobe."): item.get("value", "")
+            for item in case.findall("./properties/property")
+        }
+        verdict = properties.get("verdict")
+        reason = properties.get("reason")
+        if verdict is None:
+            if case.find("failure") is not None:
+                verdict = "FAIL"
+            elif case.find("error") is not None:
+                verdict = "ERROR"
+            elif case.find("skipped") is not None:
+                verdict = "INCONCLUSIVE"
+            else:
+                verdict = "PASS"
+        results[rule_id] = {"verdict": verdict, "reason": reason or "",
+                            "name": case.get("name") or ""}
+    return results
+
+
+def run_scan(target: Target, instance: str, mode: str, base_url: str,
+             inputs: Path, out: Path) -> dict[str, dict[str, str | None]]:
+    sandbox = out / target.name / instance / mode
+    sandbox.mkdir(parents=True, exist_ok=True)
+    sarif = sandbox / "results.sarif"
+    junit = sandbox / "results.xml"
+    rules = target.rules_legacy if mode == "legacy" else target.rules_differential
+    command = [
+        sys.executable, str(ROOT / "ledgerprobe.py"),
+        "--spec", str(target.spec), "--base-url", base_url,
+        "--rules", str(rules), "--inputs", str(inputs),
+        "--sarif", str(sarif), "--junit", str(junit),
+        "--max-rps", "20", "--timeout", "10",
+    ]
+    if target.read_only:
+        command.append("--read-only")
+    print(f"[*] {target.name}/{instance}/{mode}: {' '.join(command[1:5])} ...")
+    completed = _run(command, timeout=300, check=False, allow_findings=True)
+    if completed.returncode not in {0, 1}:
+        # JUnit may still contain per-endpoint execution errors; keep them.
+        print(f"[!] scan exited {completed.returncode}: "
+              f"{(completed.stderr or completed.stdout or '').strip()[-1000:]}", file=sys.stderr)
+    return _junit_results(junit)
+
+
+def _score(cases: list[dict[str, Any]], results: dict[str, dict[str, str | None]],
+           instance: str) -> dict[str, Any]:
+    counts = Counter()
+    rows = []
+    for case in cases:
+        if case["instance"] != instance:
+            continue
+        observed = results.get(case["rule_id"], {})
+        verdict = observed.get("verdict") or "MISSING"
+        reason = observed.get("reason") or ""
+        if case["label"] == "vulnerable":
+            outcome = "TP" if verdict == "FAIL" else "FN"
+        else:
+            outcome = "FP" if verdict == "FAIL" else "TN" if verdict == "PASS" else "INCONCLUSIVE"
+        if outcome == "INCONCLUSIVE":
+            counts["INCONCLUSIVE"] += 1
+        else:
+            if outcome == "FN" and verdict != "PASS":
+                counts["INCONCLUSIVE"] += 1
+            counts[outcome] += 1
+        rows.append({
+            "rule_id": case["rule_id"], "method": case["method"], "path": case["path"],
+            "label": case["label"], "verdict": verdict, "reason": reason,
+            "outcome": outcome, "source": case["source"],
+        })
+    tp, fp, tn, fn = counts["TP"], counts["FP"], counts["TN"], counts["FN"]
+    precision = tp / (tp + fp) if tp + fp else None
+    recall = tp / (tp + fn) if tp + fn else None
+    return {"counts": {"TP": tp, "FP": fp, "TN": tn, "FN": fn,
+                       "INCONCLUSIVE": counts["INCONCLUSIVE"]},
+            "precision": precision, "recall": recall, "rows": rows}
+
+
+def _fmt(value: float | None) -> str:
+    return "n/a" if value is None else f"{value * 100:.1f}%"
+
+
+def _table_row(name: str, mode: str, summary: dict[str, Any], status: str = "ok") -> str:
+    c = summary["counts"]
+    return (f"| {name} | {mode} | {status} | {c['TP']} | {c['FP']} | {c['TN']} | "
+            f"{c['FN']} | {c['INCONCLUSIVE']} | {_fmt(summary['precision'])} | "
+            f"{_fmt(summary['recall'])} |")
+
+
+def write_results(document: dict[str, Any], path: Path) -> None:
+    lines = [
+        "# LedgerProbe real-world benchmark results",
+        "",
+        f"Generated: {datetime.now(timezone.utc).isoformat(timespec='seconds')}",
+        "",
+        "Targets were run locally on loopback only. Labels come from "
+        "`benchmark/ground_truth/`, frozen before any scan.",
+        "",
+        "## Scores",
+        "",
+        "| Target | Mode | Status | TP | FP | TN | FN | INCONCLUSIVE | Precision | Recall |",
+        "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+    ]
+    for target_name, target_result in document["targets"].items():
+        if target_result["status"] != "ok":
+            lines.append(f"| {target_name} | — | {target_result['status']} | 0 | 0 | 0 | 0 | 0 | n/a | n/a |")
+            continue
+        for mode, summary in target_result["modes"].items():
+            lines.append(_table_row(target_name, mode, summary))
+    lines += [
+        "",
+        "INCONCLUSIVE is reported separately and is never counted as correct. "
+        "A vulnerable endpoint that is not FAIL is counted as FN; a safe endpoint "
+        "that is neither PASS nor FAIL is INCONCLUSIVE and is not counted as TN.",
+        "",
+        "## Detail",
+        "",
+    ]
+    for target_name, target_result in document["targets"].items():
+        lines.append(f"### {target_name}")
+        lines.append("")
+        if target_result["status"] != "ok":
+            lines.append(f"Not executed: {target_result['reason']}")
+            lines.append("")
+            continue
+        for mode, summary in target_result["modes"].items():
+            lines.append(f"#### {mode}")
+            lines.append("")
+            lines.append("| Case | Label | Verdict | Reason | Outcome | Source |")
+            lines.append("| --- | --- | --- | --- | --- | --- |")
+            for row in summary["rows"]:
+                lines.append(
+                    f"| `{row['rule_id']}` {row['method']} `{row['path']}` | {row['label']} | "
+                    f"{row['verdict']} | {row['reason'] or '—'} | {row['outcome']} | {row['source']} |"
+                )
+            lines.append("")
+        lines.append("#### FP/FN list")
+        lines.append("")
+        failures = [(mode, row) for mode, summary in target_result["modes"].items()
+                    for row in summary["rows"] if row["outcome"] in {"FP", "FN"}]
+        if not failures:
+            lines.append("None.")
+        for mode, row in failures:
+            lines.append(
+                f"- **{row['outcome']}** ({mode}) `{row['rule_id']}` {row['method']} "
+                f"`{row['path']}` — verdict `{row['verdict']}`, reason "
+                f"`{row['reason'] or 'none'}`. {row['label']} label; source: {row['source']}."
+            )
+        lines.append("")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def run_target(target: Target, out: Path, *, no_docker: bool, keep: bool,
+               base_urls: dict[str, str]) -> dict[str, Any]:
+    document, cases = _load_cases(target.ground_truth)
+    started = False
+    try:
+        if no_docker:
+            missing = [name for name in target.instances if not base_urls.get(name)]
+            if missing:
+                raise Blocked(f"no base URL supplied for {', '.join(missing)}")
+        else:
+            compose_up(target, out)
+            started = True
+        modes: dict[str, Any] = {}
+        all_rows: list[dict[str, Any]] = []
+        for mode in ("legacy", "differential"):
+            combined = {"counts": Counter({key: 0 for key in
+                                            ("TP", "FP", "TN", "FN", "INCONCLUSIVE")}),
+                        "rows": []}
+            for instance, default_url in target.instances.items():
+                base = base_urls.get(instance) or default_url
+                validate_target_url(base, allow_docker_internal=False,
+                                    docker_hosts=target.docker_hosts)
+                inputs = out / target.name / instance / "inputs.json"
+                if not inputs.exists():
+                    setup_command = [
+                        sys.executable, str(target.setup),
+                        "--base-url", base, "--instance", instance,
+                        "--out", str(inputs),
+                    ]
+                    _run(setup_command, timeout=180)
+                results = run_scan(target, instance, mode, base, inputs, out)
+                summary = _score(cases, results, instance)
+                for key in ("TP", "FP", "TN", "FN", "INCONCLUSIVE"):
+                    combined["counts"][key] += summary["counts"][key]
+                combined["rows"].extend({**row, "instance": instance} for row in summary["rows"])
+            tp, fp, tn, fn = (combined["counts"][key] for key in ("TP", "FP", "TN", "FN"))
+            modes[mode] = {
+                "counts": dict(combined["counts"]),
+                "precision": tp / (tp + fp) if tp + fp else None,
+                "recall": tp / (tp + fn) if tp + fn else None,
+                "rows": combined["rows"],
+            }
+        return {"status": "ok", "modes": modes, "ground_truth": document}
+    except Blocked as exc:
+        return {"status": "blocked", "reason": str(exc), "ground_truth": document}
+    finally:
+        if started and not keep:
+            compose_down(target)
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="LedgerProbe local benchmark harness")
+    parser.add_argument("--target", choices=[*TARGETS, "all"], default="all")
+    parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
+    parser.add_argument("--no-docker", action="store_true",
+                        help="use already-running loopback targets instead of compose")
+    parser.add_argument("--keep", action="store_true", help="leave compose services running")
+    parser.add_argument("--merge", action="store_true",
+                        help="update selected targets in an existing results.json")
+    parser.add_argument("--base-url-vulnerable", help="override VAmPI vulnerable instance URL")
+    parser.add_argument("--base-url-secure", help="override VAmPI secure instance URL")
+    parser.add_argument("--base-url-default", help="override the single-instance target URL")
+    args = parser.parse_args(argv)
+
+    out = args.out.resolve()
+    out.mkdir(parents=True, exist_ok=True)
+    selected = list(TARGETS) if args.target == "all" else [args.target]
+    overrides = {
+        "vulnerable": args.base_url_vulnerable,
+        "secure": args.base_url_secure,
+        "default": args.base_url_default,
+    }
+    document: dict[str, Any] = {"targets": {}, "generated": datetime.now(timezone.utc).isoformat()}
+    prior = out / "results.json"
+    if args.merge and prior.exists():
+        loaded = json.loads(prior.read_text(encoding="utf-8"))
+        if isinstance(loaded, dict) and isinstance(loaded.get("targets"), dict):
+            document = loaded
+    exit_code = 0
+    for name in selected:
+        target = TARGETS[name]
+        base_urls = {instance: overrides.get(instance) or "" for instance in target.instances}
+        if not args.no_docker:
+            if not docker_available():
+                document["targets"][name] = {
+                    "status": "blocked",
+                    "reason": "Docker daemon is not reachable by this user; no containers were started.",
+                }
+                print(f"[!] {name}: blocked (Docker daemon unavailable)", file=sys.stderr)
+                exit_code = 2
+                continue
+        print(f"[*] target {name}: {', '.join(target.instances)}")
+        result = run_target(target, out, no_docker=args.no_docker, keep=args.keep,
+                            base_urls=base_urls)
+        document["targets"][name] = result
+        if result["status"] != "ok":
+            print(f"[!] {name}: {result['reason']}", file=sys.stderr)
+            exit_code = 2
+    results_path = BENCH / "RESULTS.md"
+    write_results(document, results_path)
+    (out / "results.json").write_text(json.dumps(document, indent=2, default=str) + "\n",
+                                      encoding="utf-8")
+    print(f"[+] results: {results_path}")
+    return exit_code
+
+
+if __name__ == "__main__":
+    sys.exit(main())

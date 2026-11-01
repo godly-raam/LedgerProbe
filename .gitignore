@@ -22,3 +22,6 @@ dashboard/*.tsbuildinfo
 
 .env
 .DS_Store
+
+# Benchmark runtime: tokens, databases, reports, cloned upstream sources
+benchmark/.out/

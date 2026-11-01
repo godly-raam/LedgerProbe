@@ -1,0 +1,174 @@
+# Trimmed crAPI stack for read-only authorization testing. Chatbot/chromadb are
+# omitted because they are irrelevant to BOLA and consume memory. All published
+# ports bind to loopback. Images are pinned to the published 1.1.6 tag; the
+# source used for ground truth is 1.1.5 (see benchmark/ground_truth/crapi.yaml).
+name: ledgerprobe-crapi
+
+services:
+  crapi-identity:
+    image: crapi/crapi-identity:1.1.6
+    environment:
+      DB_NAME: crapi
+      DB_USER: admin
+      DB_PASSWORD: crapisecretpassword
+      DB_HOST: postgresdb
+      DB_PORT: "5432"
+      SERVER_PORT: "8080"
+      JWT_SECRET: crapi
+      MAILHOG_HOST: mailhog
+      MAILHOG_PORT: "1025"
+      MAILHOG_DOMAIN: example.com
+      JWT_EXPIRATION: "604800000"
+      TLS_ENABLED: "false"
+      ENABLE_SHELL_INJECTION: "false"
+      ENABLE_LOG4J: "false"
+    depends_on:
+      postgresdb:
+        condition: service_healthy
+      mongodb:
+        condition: service_healthy
+      mailhog:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "/app/health.sh"]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+
+  crapi-community:
+    image: crapi/crapi-community:1.1.6
+    environment:
+      IDENTITY_SERVICE: crapi-identity:8080
+      DB_NAME: crapi
+      DB_USER: admin
+      DB_PASSWORD: crapisecretpassword
+      DB_HOST: postgresdb
+      DB_PORT: "5432"
+      SERVER_PORT: "8087"
+      MONGO_DB_HOST: mongodb
+      MONGO_DB_PORT: "27017"
+      MONGO_DB_USER: admin
+      MONGO_DB_PASSWORD: crapisecretpassword
+      MONGO_DB_NAME: crapi
+      TLS_ENABLED: "false"
+    depends_on:
+      postgresdb:
+        condition: service_healthy
+      mongodb:
+        condition: service_healthy
+      crapi-identity:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/app/health.sh"]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+
+  crapi-workshop:
+    image: crapi/crapi-workshop:1.1.6
+    environment:
+      IDENTITY_SERVICE: crapi-identity:8080
+      DB_NAME: crapi
+      DB_USER: admin
+      DB_PASSWORD: crapisecretpassword
+      DB_HOST: postgresdb
+      DB_PORT: "5432"
+      SERVER_PORT: "8000"
+      MONGO_DB_HOST: mongodb
+      MONGO_DB_PORT: "27017"
+      MONGO_DB_USER: admin
+      MONGO_DB_PASSWORD: crapisecretpassword
+      MONGO_DB_NAME: crapi
+      SECRET_KEY: crapi
+      API_GATEWAY_URL: https://api.mypremiumdealership.com
+      TLS_ENABLED: "false"
+      FILES_LIMIT: "1000"
+    depends_on:
+      postgresdb:
+        condition: service_healthy
+      mongodb:
+        condition: service_healthy
+      crapi-identity:
+        condition: service_healthy
+      crapi-community:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/app/health.sh"]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+
+  api.mypremiumdealership.com:
+    image: crapi/gateway-service:1.1.6
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo -n \"GET / HTTP/1.1\\n\\n\" > /dev/tcp/127.0.0.1/443'"]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+      start_period: 10s
+
+  crapi-web:
+    image: crapi/crapi-web:1.1.6
+    ports:
+      - "127.0.0.1:8888:80"
+    environment:
+      COMMUNITY_SERVICE: crapi-community:8087
+      IDENTITY_SERVICE: crapi-identity:8080
+      WORKSHOP_SERVICE: crapi-workshop:8000
+      MAILHOG_WEB_SERVICE: mailhog:8025
+      TLS_ENABLED: "false"
+    depends_on:
+      crapi-community:
+        condition: service_healthy
+      crapi-identity:
+        condition: service_healthy
+      crapi-workshop:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:80/health"]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+
+  postgresdb:
+    image: postgres:14.15
+    command: ["postgres", "-c", "max_connections=500"]
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: crapisecretpassword
+      POSTGRES_DB: crapi
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready"]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+    volumes:
+      - postgresql-data:/var/lib/postgresql/data
+
+  mongodb:
+    image: mongo:4.4.29
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: admin
+      MONGO_INITDB_ROOT_PASSWORD: crapisecretpassword
+    healthcheck:
+      test: ["CMD-SHELL", "echo 'db.runCommand(\"ping\").ok' | mongo localhost:27017/test --quiet"]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+      start_period: 20s
+    volumes:
+      - mongodb-data:/data/db
+
+  mailhog:
+    image: crapi/mailhog:1.1.6
+    ports:
+      - "127.0.0.1:8025:8025"
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 8025"]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+
+volumes:
+  postgresql-data:
+  mongodb-data:

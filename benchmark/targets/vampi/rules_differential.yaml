@@ -1,0 +1,187 @@
+# Differential rules: the engine compares owner/other responses and both
+# negative controls. Public controls use no canary so identical public data can
+# pass as public_endpoint; owner-specific endpoints require a baseline canary.
+rules:
+  - id: vampi-books-object
+    name: Another user must not read a book secret
+    severity: HIGH
+    owasp_category: API1:2023
+    cvss_score: 8.1
+    target_endpoints:
+      - path: /books/v1/{book_title}
+        method: GET
+    auth_contexts:
+      primary: owner
+      forbidden: other
+    parameters:
+      path:
+        book_title: "{{book_title}}"
+    acceptable_status: [401, 403, 404]
+    leak_detection:
+      canaries: ["{{canary_value}}"]
+      min_unique_leaf_values: 2
+      ignore_fields: []
+    controls:
+      nonexistent_object: true
+      unauthenticated: true
+    confirm: 2
+    require_primary_canary: true
+
+  - id: vampi-users-password
+    name: Another user must not change a password
+    severity: HIGH
+    owasp_category: API1:2023
+    cvss_score: 8.1
+    target_endpoints:
+      - path: /users/v1/{username}/password
+        method: PUT
+    auth_contexts:
+      primary: owner
+      forbidden: other
+    parameters:
+      path:
+        username: "{{owner_username}}"
+    body:
+      password: "{{new_password}}"
+    acceptable_status: [401, 403, 404]
+    leak_detection:
+      canaries: []
+      min_unique_leaf_values: 5
+      ignore_fields: []
+    controls:
+      nonexistent_object: true
+      unauthenticated: true
+    confirm: 2
+
+  - id: vampi-users-object
+    name: Another user must not read a profile object
+    severity: HIGH
+    owasp_category: API1:2023
+    cvss_score: 8.1
+    target_endpoints:
+      - path: /users/v1/{username}
+        method: GET
+    auth_contexts:
+      primary: owner
+      forbidden: other
+    parameters:
+      path:
+        username: "{{owner_username}}"
+    acceptable_status: [401, 403, 404]
+    leak_detection:
+      # VAmPI serialises this handler's body as a JSON-encoded string, so the
+      # whole string is one leaf; one exact overlap is all the evidence available.
+      canaries: []
+      min_unique_leaf_values: 1
+      ignore_fields: []
+    controls:
+      nonexistent_object: true
+      unauthenticated: true
+    confirm: 2
+
+  - id: vampi-users-list
+    name: The user directory must not expose owner emails
+    severity: HIGH
+    owasp_category: API3:2023
+    cvss_score: 7.5
+    target_endpoints:
+      - path: /users/v1
+        method: GET
+    auth_contexts:
+      primary: owner
+      forbidden: other
+    acceptable_status: [401, 403, 404]
+    leak_detection:
+      canaries: ["{{owner_email}}"]
+      min_unique_leaf_values: 2
+      ignore_fields: []
+    controls:
+      nonexistent_object: true
+      unauthenticated: true
+    confirm: 2
+    require_primary_canary: true
+
+  - id: vampi-users-debug
+    name: The debug directory must not expose owner credentials
+    severity: CRITICAL
+    owasp_category: API3:2023
+    cvss_score: 9.1
+    target_endpoints:
+      - path: /users/v1/_debug
+        method: GET
+    auth_contexts:
+      primary: owner
+      forbidden: other
+    acceptable_status: [401, 403, 404]
+    leak_detection:
+      canaries: ["{{owner_email}}"]
+      min_unique_leaf_values: 2
+      ignore_fields: []
+    controls:
+      nonexistent_object: true
+      unauthenticated: true
+    confirm: 2
+    require_primary_canary: true
+
+  - id: vampi-home
+    name: Public banner must expose no owner data
+    severity: INFO
+    owasp_category: API9:2023
+    cvss_score: 1.0
+    target_endpoints:
+      - path: /
+        method: GET
+    auth_contexts:
+      primary: owner
+      forbidden: other
+    acceptable_status: [401, 403, 404]
+    leak_detection:
+      canaries: []
+      min_unique_leaf_values: 5
+      ignore_fields: []
+    controls:
+      nonexistent_object: true
+      unauthenticated: true
+    confirm: 2
+
+  - id: vampi-book-list
+    name: Public book catalogue must not expose secrets
+    severity: LOW
+    owasp_category: API3:2023
+    cvss_score: 2.0
+    target_endpoints:
+      - path: /books/v1
+        method: GET
+    auth_contexts:
+      primary: owner
+      forbidden: other
+    acceptable_status: [401, 403, 404]
+    leak_detection:
+      canaries: []
+      min_unique_leaf_values: 5
+      ignore_fields: []
+    controls:
+      nonexistent_object: true
+      unauthenticated: true
+    confirm: 2
+
+  - id: vampi-me
+    name: Caller profile must be scoped to the token
+    severity: LOW
+    owasp_category: API1:2023
+    cvss_score: 2.0
+    target_endpoints:
+      - path: /me
+        method: GET
+    auth_contexts:
+      primary: owner
+      forbidden: other
+    acceptable_status: [401, 403, 404]
+    leak_detection:
+      canaries: []
+      min_unique_leaf_values: 5
+      ignore_fields: []
+    controls:
+      nonexistent_object: true
+      unauthenticated: true
+    confirm: 2

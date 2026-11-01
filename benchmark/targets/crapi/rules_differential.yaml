@@ -1,0 +1,234 @@
+# Differential rules for crAPI. Public/self-scoped controls use no canary;
+# owner-specific endpoints require a baseline canary. Self-scoped safe
+# endpoints may be INCONCLUSIVE because the engine expects a denial, which is
+# reported honestly rather than turned into a finding.
+rules:
+  - id: crapi-vehicle-location
+    name: Another user must not read a vehicle location
+    severity: HIGH
+    owasp_category: API1:2023
+    cvss_score: 8.1
+    target_endpoints:
+      - path: /identity/api/v2/vehicle/{vehicleId}/location
+        method: GET
+    auth_contexts:
+      primary: owner
+      forbidden: other
+    parameters:
+      path:
+        vehicleId: "{{owner_vehicle_id}}"
+    acceptable_status: [401, 403, 404]
+    leak_detection:
+      canaries: ["{{owner_email}}"]
+      min_unique_leaf_values: 2
+      ignore_fields: []
+    controls:
+      nonexistent_object: true
+      unauthenticated: true
+    confirm: 2
+    require_primary_canary: true
+
+  - id: crapi-mechanic-report
+    name: Another user must not read a mechanic report
+    severity: HIGH
+    owasp_category: API1:2023
+    cvss_score: 8.1
+    target_endpoints:
+      - path: /workshop/api/mechanic/mechanic_report
+        method: GET
+    auth_contexts:
+      primary: owner
+      forbidden: other
+    parameters:
+      query:
+        report_id: "{{report_id}}"
+    acceptable_status: [400, 401, 403, 404]
+    leak_detection:
+      canaries: ["{{report_problem}}"]
+      min_unique_leaf_values: 2
+      ignore_fields: []
+    controls:
+      nonexistent_object: true
+      unauthenticated: true
+    confirm: 2
+    require_primary_canary: true
+
+  - id: crapi-order-object
+    name: Another user must not read a shop order
+    severity: HIGH
+    owasp_category: API1:2023
+    cvss_score: 8.1
+    target_endpoints:
+      - path: /workshop/api/shop/orders/{order_id}
+        method: GET
+    auth_contexts:
+      primary: owner
+      forbidden: other
+    parameters:
+      path:
+        order_id: "{{order_id}}"
+    acceptable_status: [401, 403, 404]
+    leak_detection:
+      canaries: ["{{owner_email}}"]
+      min_unique_leaf_values: 2
+      ignore_fields: []
+    controls:
+      nonexistent_object: true
+      unauthenticated: true
+    confirm: 2
+    require_primary_canary: true
+
+  - id: crapi-community-recent
+    name: Community feed must not expose author vehicle ids
+    severity: MEDIUM
+    owasp_category: API3:2023
+    cvss_score: 5.3
+    target_endpoints:
+      - path: /community/api/v2/community/posts/recent
+        method: GET
+    auth_contexts:
+      primary: owner
+      forbidden: other
+    acceptable_status: [401, 403, 404]
+    leak_detection:
+      canaries: ["{{owner_vehicle_id}}"]
+      min_unique_leaf_values: 2
+      ignore_fields: []
+    controls:
+      nonexistent_object: true
+      unauthenticated: true
+    confirm: 2
+    require_primary_canary: true
+
+  - id: crapi-service-requests-vin
+    name: Service requests by VIN must require ownership
+    severity: HIGH
+    owasp_category: API1:2023
+    cvss_score: 8.1
+    target_endpoints:
+      - path: /workshop/api/merchant/service_requests/{vin}
+        method: GET
+    auth_contexts:
+      primary: owner
+      forbidden: other
+    parameters:
+      path:
+        vin: "{{owner_vin}}"
+    acceptable_status: [401, 403, 404]
+    leak_detection:
+      canaries: ["{{report_problem}}"]
+      min_unique_leaf_values: 2
+      ignore_fields: []
+    controls:
+      nonexistent_object: true
+      unauthenticated: true
+    confirm: 2
+    require_primary_canary: true
+
+  - id: crapi-dashboard
+    name: Dashboard must be scoped to the caller
+    severity: LOW
+    owasp_category: API1:2023
+    cvss_score: 2.0
+    target_endpoints:
+      - path: /identity/api/v2/user/dashboard
+        method: GET
+    auth_contexts:
+      primary: owner
+      forbidden: other
+    acceptable_status: [401, 403, 404]
+    leak_detection:
+      canaries: []
+      min_unique_leaf_values: 6
+      ignore_fields: []
+    controls:
+      nonexistent_object: true
+      unauthenticated: true
+    confirm: 2
+
+  - id: crapi-vehicles
+    name: Vehicle list must be scoped to the caller
+    severity: LOW
+    owasp_category: API1:2023
+    cvss_score: 2.0
+    target_endpoints:
+      - path: /identity/api/v2/vehicle/vehicles
+        method: GET
+    auth_contexts:
+      primary: owner
+      forbidden: other
+    acceptable_status: [401, 403, 404]
+    leak_detection:
+      canaries: []
+      min_unique_leaf_values: 6
+      ignore_fields: []
+    controls:
+      nonexistent_object: true
+      unauthenticated: true
+    confirm: 2
+
+  - id: crapi-orders-all
+    name: Order list must be scoped to the caller
+    severity: LOW
+    owasp_category: API1:2023
+    cvss_score: 2.0
+    target_endpoints:
+      - path: /workshop/api/shop/orders/all
+        method: GET
+    auth_contexts:
+      primary: owner
+      forbidden: other
+    acceptable_status: [401, 403, 404]
+    leak_detection:
+      canaries: []
+      min_unique_leaf_values: 6
+      ignore_fields: []
+    controls:
+      nonexistent_object: true
+      unauthenticated: true
+    confirm: 2
+
+  - id: crapi-products
+    name: Public product catalogue must expose no owner data
+    severity: INFO
+    owasp_category: API9:2023
+    cvss_score: 1.0
+    target_endpoints:
+      - path: /workshop/api/shop/products
+        method: GET
+    auth_contexts:
+      primary: owner
+      forbidden: other
+    acceptable_status: [401, 403, 404]
+    leak_detection:
+      canaries: []
+      min_unique_leaf_values: 6
+      ignore_fields: []
+    controls:
+      nonexistent_object: true
+      unauthenticated: true
+    confirm: 2
+
+  - id: crapi-video-object
+    name: Profile video must be scoped to its owner
+    severity: LOW
+    owasp_category: API1:2023
+    cvss_score: 2.0
+    target_endpoints:
+      - path: /identity/api/v2/user/videos/{video_id}
+        method: GET
+    auth_contexts:
+      primary: owner
+      forbidden: other
+    parameters:
+      path:
+        video_id: "{{video_id}}"
+    acceptable_status: [401, 403, 404]
+    leak_detection:
+      canaries: []
+      min_unique_leaf_values: 6
+      ignore_fields: []
+    controls:
+      nonexistent_object: true
+      unauthenticated: true
+    confirm: 2

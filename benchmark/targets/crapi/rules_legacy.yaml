@@ -1,0 +1,167 @@
+# Naive baseline: every cross-tenant read must return exactly 403. No controls,
+# canaries or confirmations. Safe 200/204/404 responses become false positives.
+rules:
+  - id: crapi-vehicle-location
+    name: Legacy status check for another user's vehicle location
+    severity: HIGH
+    owasp_category: API1:2023
+    cvss_score: 7.5
+    target_endpoints:
+      - path: /identity/api/v2/vehicle/{vehicleId}/location
+        method: GET
+    auth_contexts:
+      primary: owner
+      forbidden: other
+    parameters:
+      path:
+        vehicleId: "{{owner_vehicle_id}}"
+    assertions:
+      - type: status_code
+        expected: 403
+
+  - id: crapi-mechanic-report
+    name: Legacy status check for another user's mechanic report
+    severity: HIGH
+    owasp_category: API1:2023
+    cvss_score: 7.5
+    target_endpoints:
+      - path: /workshop/api/mechanic/mechanic_report
+        method: GET
+    auth_contexts:
+      primary: owner
+      forbidden: other
+    parameters:
+      query:
+        report_id: "{{report_id}}"
+    assertions:
+      - type: status_code
+        expected: 403
+
+  - id: crapi-order-object
+    name: Legacy status check for another user's shop order
+    severity: HIGH
+    owasp_category: API1:2023
+    cvss_score: 7.5
+    target_endpoints:
+      - path: /workshop/api/shop/orders/{order_id}
+        method: GET
+    auth_contexts:
+      primary: owner
+      forbidden: other
+    parameters:
+      path:
+        order_id: "{{order_id}}"
+    assertions:
+      - type: status_code
+        expected: 403
+
+  - id: crapi-community-recent
+    name: Legacy status check for the community feed
+    severity: MEDIUM
+    owasp_category: API3:2023
+    cvss_score: 5.3
+    target_endpoints:
+      - path: /community/api/v2/community/posts/recent
+        method: GET
+    auth_contexts:
+      primary: owner
+      forbidden: other
+    assertions:
+      - type: status_code
+        expected: 403
+
+  - id: crapi-service-requests-vin
+    name: Legacy status check for service requests by VIN
+    severity: HIGH
+    owasp_category: API1:2023
+    cvss_score: 7.5
+    target_endpoints:
+      - path: /workshop/api/merchant/service_requests/{vin}
+        method: GET
+    auth_contexts:
+      primary: owner
+      forbidden: other
+    parameters:
+      path:
+        vin: "{{owner_vin}}"
+    assertions:
+      - type: status_code
+        expected: 403
+
+  - id: crapi-dashboard
+    name: Legacy status check for the caller dashboard
+    severity: LOW
+    owasp_category: API1:2023
+    cvss_score: 2.0
+    target_endpoints:
+      - path: /identity/api/v2/user/dashboard
+        method: GET
+    auth_contexts:
+      primary: owner
+      forbidden: other
+    assertions:
+      - type: status_code
+        expected: 403
+
+  - id: crapi-vehicles
+    name: Legacy status check for the caller vehicle list
+    severity: LOW
+    owasp_category: API1:2023
+    cvss_score: 2.0
+    target_endpoints:
+      - path: /identity/api/v2/vehicle/vehicles
+        method: GET
+    auth_contexts:
+      primary: owner
+      forbidden: other
+    assertions:
+      - type: status_code
+        expected: 403
+
+  - id: crapi-orders-all
+    name: Legacy status check for the caller order list
+    severity: LOW
+    owasp_category: API1:2023
+    cvss_score: 2.0
+    target_endpoints:
+      - path: /workshop/api/shop/orders/all
+        method: GET
+    auth_contexts:
+      primary: owner
+      forbidden: other
+    assertions:
+      - type: status_code
+        expected: 403
+
+  - id: crapi-products
+    name: Legacy status check for the public product catalogue
+    severity: INFO
+    owasp_category: API9:2023
+    cvss_score: 1.0
+    target_endpoints:
+      - path: /workshop/api/shop/products
+        method: GET
+    auth_contexts:
+      primary: owner
+      forbidden: other
+    assertions:
+      - type: status_code
+        expected: 403
+
+  - id: crapi-video-object
+    name: Legacy status check for another user's profile video
+    severity: LOW
+    owasp_category: API1:2023
+    cvss_score: 2.0
+    target_endpoints:
+      - path: /identity/api/v2/user/videos/{video_id}
+        method: GET
+    auth_contexts:
+      primary: owner
+      forbidden: other
+    parameters:
+      path:
+        video_id: "{{video_id}}"
+    assertions:
+      - type: status_code
+        expected: 403

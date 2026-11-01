@@ -1,0 +1,21 @@
+# VAmPI has one mutable Docker Hub tag (`latest`); the digest below is the
+# amd64 manifest-list digest observed on 2026-11-01. Both services use the same
+# image and differ only by the upstream `vulnerable` switch.
+name: ledgerprobe-vampi
+
+services:
+  vulnerable:
+    image: erev0s/vampi@sha256:0a5a224b6e14ae7da6a6ea265178ff71286ff903aec74adee98f660bb0e4ca12
+    ports:
+      - "127.0.0.1:5002:5000"
+    environment:
+      vulnerable: "1"
+      tokentimetolive: "3600"
+
+  secure:
+    image: erev0s/vampi@sha256:0a5a224b6e14ae7da6a6ea265178ff71286ff903aec74adee98f660bb0e4ca12
+    ports:
+      - "127.0.0.1:5001:5000"
+    environment:
+      vulnerable: "0"
+      tokentimetolive: "3600"
