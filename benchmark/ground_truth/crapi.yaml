@@ -6,11 +6,14 @@
 #
 # Upstream snapshot:
 #   repository: https://github.com/OWASP/crAPI
-#   source:     checked-out tree in benchmark/.out/crapi-source, VERSION 1.1.5
-#   images:     crapi/*:1.1.6 (the closest published tag; 1.1.5 images are not
-#               published on Docker Hub). This source/image skew is recorded as
-#               a benchmark limitation; the crAPI target was not executed in
-#               this environment because the Docker socket is unavailable.
+#   source:     benchmark/.out/crapi-source; the cited files match tag v1.1.6.
+#               Its VERSION file says 1.1.5, but that file is stale in v1.1.6.
+#   images:     crapi release images pinned by digest in targets/crapi/compose.yaml
+#
+# 2026-11-01 reconciliation: diffed every cited file between tags v1.1.5 and
+# v1.1.6. No label changes. The service_requests/{vin} endpoint did not exist in
+# 1.1.5 and was added (without authentication) in 1.1.6; the earlier header
+# incorrectly called the snapshot 1.1.5. Labels are unchanged.
 #
 # Only read-only endpoints are labelled so the legacy and differential rule
 # sets exercise the same surface. crAPI has no global secure/fixed mode.
@@ -19,7 +22,7 @@ target: crapi
 title: OWASP crAPI
 upstream:
   repository: https://github.com/OWASP/crAPI
-  source_version: "1.1.5"
+  source_version: "1.1.6"
   image_tag: "1.1.6"
   openapi: openapi-spec/crapi-openapi-spec.json
 
