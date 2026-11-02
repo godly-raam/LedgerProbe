@@ -1,0 +1,90 @@
+# Race profiles run against a real uvicorn loopback subprocess.
+wallet_race_vulnerable:
+  category: vulnerable
+  expected_verdict: FAIL
+  expected_reason: race_invariant_violated
+  expected_note: null
+  rule_file: rules_race_wallet.yaml
+  extra_args: ["--allow-mutations"]
+  description: "Check-then-act wallet debit accepts every concurrent request"
+
+wallet_race_safe:
+  category: safe
+  expected_verdict: PASS
+  expected_reason: null
+  expected_note: no_violation_observed
+  rule_file: rules_race_wallet.yaml
+  extra_args: ["--allow-mutations"]
+  description: "Atomic wallet debit accepts one request and one debit"
+
+coupon_single_use_vulnerable:
+  category: vulnerable
+  expected_verdict: FAIL
+  expected_reason: race_invariant_violated
+  expected_note: null
+  rule_file: rules_race_coupon.yaml
+  extra_args: ["--allow-mutations"]
+  description: "Concurrent coupon redemption records more than one use"
+
+coupon_single_use_safe:
+  category: safe
+  expected_verdict: PASS
+  expected_reason: null
+  expected_note: no_violation_observed
+  rule_file: rules_race_coupon.yaml
+  extra_args: ["--allow-mutations"]
+  description: "Atomic coupon redemption records one use"
+
+idempotency_key_ignored:
+  category: vulnerable
+  expected_verdict: FAIL
+  expected_reason: race_invariant_violated
+  expected_note: null
+  rule_file: rules_race_idempotency.yaml
+  extra_args: ["--allow-mutations"]
+  description: "Repeated identical idempotency key still debits each request"
+
+idempotency_key_honored:
+  category: safe
+  expected_verdict: PASS
+  expected_reason: null
+  expected_note: no_violation_observed
+  rule_file: rules_race_idempotency.yaml
+  extra_args: ["--allow-mutations"]
+  description: "One idempotency key produces one accepted debit"
+
+weak_sync:
+  category: tricky
+  expected_verdict: INCONCLUSIVE
+  expected_reason: weak_synchronization
+  expected_note: null
+  rule_file: rules_race_weak.yaml
+  extra_args: ["--allow-mutations"]
+  description: "Burst release spread exceeds the strong-sync threshold"
+
+rate_limit_429_during_race:
+  category: tricky
+  expected_verdict: INCONCLUSIVE
+  expected_reason: rate_limited
+  expected_note: null
+  rule_file: rules_race_wallet.yaml
+  extra_args: ["--allow-mutations"]
+  description: "All raced requests are rate limited"
+
+reset_failure:
+  category: tricky
+  expected_verdict: INCONCLUSIVE
+  expected_reason: reset_failed
+  expected_note: null
+  rule_file: rules_race_wallet.yaml
+  extra_args: ["--allow-mutations"]
+  description: "The first per-round reset returns 500"
+
+race_mutation_blocked:
+  category: tricky
+  expected_verdict: SKIPPED
+  expected_reason: mutation_blocked
+  expected_note: null
+  rule_file: rules_race_wallet.yaml
+  extra_args: []
+  description: "Race check without --allow-mutations"

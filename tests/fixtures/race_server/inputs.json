@@ -1,0 +1,7 @@
+{
+  "contexts": {
+    "owner": {"X-Actor": "owner"},
+    "other": {"X-Actor": "other"}
+  },
+  "variables": {}
+}

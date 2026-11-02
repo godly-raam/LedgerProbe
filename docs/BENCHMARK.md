@@ -1,13 +1,16 @@
 # LedgerProbe real-world benchmark
 
-LedgerProbe differential v3 result: **0 FP of 10 safe cases, 13 of 13 vulnerable
-cases detected, and 1 abstention** (one safe crAPI case). The previous
-differential result was 0 FP of 10 safe cases, 12 of 13 vulnerable cases
-detected, and 3 abstentions. The original v1 result was 0 FP of 10 safe cases,
-10 of 13 vulnerable cases detected, and 9 abstentions.
+The v3 VAmPI differential run is clean on its own terms: **8 TP, 5 TN, 0 FP,
+0 FN, 0 abstentions** on 13 cases. It is the third tuning round on those same
+13 cases, not an independent validation. Including the unchanged crAPI rows,
+the aggregate v3 differential result is **13 TP, 0 FP, 9 TN, 0 FN, and 1
+abstention** (one safe crAPI case). The pre-tuning number is still **v1**:
+0 FP of 10 safe cases, 10 of 13 vulnerable cases detected, and 9 abstentions.
+v2 was 0 FP of 10 safe cases, 12 of 13 vulnerable cases detected, and 3
+abstentions.
 
 v2 rules were authored after viewing v1 results; v1 is the pre-tuning number.
-v3 mutation rules were authored after viewing v2 results. This benchmark is
+v3 rules were authored after viewing v2 results. This benchmark is
 small and source-derived, not a population estimate. It measures whether
 LedgerProbe's differential authorization engine finds documented BOLA/IDOR on
 projects the engine's authors did not write. It compares the current engine with
@@ -44,11 +47,19 @@ ERROR. A failed restore is `ERROR restore_failed` and a non-zero exit. Mutation
 attempts are capped at one per rule, and a rule without a `verify:` block is
 `INCONCLUSIVE unverified_mutation` after a 2xx response.
 
-The VAmPI differential set includes the documented password-change mutation.
+The VAmPI legacy rows in this document are **v2 records**, not v3 re-runs. The
+legacy PUT rule predates the `mutating` contract and would need migration before
+a full legacy replay. The VAmPI differential set includes the documented password-change mutation.
 crAPI rules are read-only and the benchmark runs the engine with `--read-only`.
 The legacy VAmPI status baseline is a historical v2 record and is not re-run in
 v3; its PUT rule predates the `mutating` contract and would need migration before
 a full legacy replay.
+
+The separate **56-profile fixture corpus** is also 100%, but those fixtures and
+the engine were written by the same author. It is a regression guard for known
+behaviors, not an accuracy measurement. The race suite likewise validates the
+engine on loopback fixtures; it does not establish that a real target is free of
+race conditions. See `docs/RACE.md` for the race design and detection study.
 
 ## Targets and versions
 
@@ -135,7 +146,7 @@ Cells are `TP/FP/TN/FN/INC_vuln/INC_safe`.
 | **Overall** | **10/0/4/0/3/6** | **12/0/8/0/1/2** | **13/0/9/0/0/1** |
 
 v2 rules were authored after viewing v1 results; v1 is the pre-tuning number.
-v3 mutation rules were authored after viewing v2 results. The v3 change is
+v3 rules were authored after viewing v2 results. The v3 change is
 concentrated in the VAmPI password case: the forbidden mutation's generic 204
 response is now verified by an owner login probe, and the owner password is
 restored in a `finally` path.
@@ -313,7 +324,8 @@ was not rerun for v3 because the engine changes do not alter target content.
   endpoints, run in both target modes; 10 crAPI cases), not a population. There
   are no confidence intervals or inter-rater checks; three repeats establish
   determinism, not statistical significance.
-- The engine, rules, and benchmark share the same author. Ground truth was frozen
+- The engine, rules, and benchmark share the same author. The 56-profile fixture
+  corpus guards regressions but cannot measure accuracy. Ground truth was frozen
   first, but endpoint selection, canaries, and scope declarations still reflect
   knowledge of the targets. v2 was authored after v1 results and v3 after v2
   results; v1 is the pre-tuning number.

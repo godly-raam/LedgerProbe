@@ -353,3 +353,22 @@ Use it for the legacy assertion schema. `rulesets/abac_isolation.yaml` is the
 differential read-only example: it has no assertions, resolves `{{teen_id}}` as
 a scalar canary, and uses two confirmation repeats. A legacy-only runner must
 reject differential fields rather than silently downgrade the policy.
+
+## Race-condition extension
+
+Mutating rules may add a strict `race:` block (documented in `docs/RACE.md`).
+Race rules still require `mutating: true`, a non-safe target method, `restore:`,
+and the normal `--allow-mutations` / `--allow-host` / non-`--read-only` gates.
+The block supports bounded `requests` (default 10, max 50), `rounds` (default 5,
+max 20), `sync` (`last_byte`, `burst`, or optional `h2_single_packet`),
+`identity`, required `reset:`, `success_status`, optional `idempotency`, and a
+required `invariant` with `max_successes` and/or a signed `ledger` check.
+
+Every reset, snapshot, race request, and restore request uses the same
+`GuardedClient`; `GuardedClient.send_synchronized()` applies the read-only path
+policy, host allowlist, rate bucket, and cooldown. Reset failure is
+`INCONCLUSIVE reset_failed`; snapshot failure is `verify_unavailable`; an
+invariant violation is `FAIL race_invariant_violated`; fewer than five strong
+rounds (or fewer than half) is `INCONCLUSIVE weak_synchronization`; restore
+failure is `ERROR restore_failed`. A PASS is reported as
+`no_violation_observed`, never as proof of absence.

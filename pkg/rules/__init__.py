@@ -19,7 +19,7 @@ import httpx
 import yaml
 
 from ..guardrails import UnsafeRequest
-from .verdict import _typed, _values, evaluate_differential, evaluate_mutation, evaluate_scoped
+from .verdict import _typed, _values, evaluate_differential, evaluate_mutation, evaluate_race, evaluate_scoped
 
 __all__ = ["load_rules", "run_rules"]
 
@@ -158,6 +158,71 @@ def _verify_spec(value):
             raise ValueError("state_diff verification has unknown fields")
 
 
+def _race_spec(value):
+    _keys(value, {"requests", "rounds", "sync", "identity", "reset", "success_status",
+                  "idempotency", "max_spread_ms", "invariant"},
+          {"identity", "reset", "invariant"})
+    requests = value.get("requests", 10)
+    if type(requests) is not int or not 1 <= requests <= 50:
+        raise ValueError("race.requests must be an integer from 1 to 50")
+    rounds = value.get("rounds", 5)
+    if type(rounds) is not int or not 1 <= rounds <= 20:
+        raise ValueError("race.rounds must be an integer from 1 to 20")
+    if value.get("sync", "last_byte") not in {"last_byte", "h2_single_packet", "burst"}:
+        raise ValueError("race.sync must be last_byte, h2_single_packet or burst")
+    _text(value["identity"])
+    reset = value["reset"]
+    if not isinstance(reset, list) or not reset:
+        raise ValueError("race.reset must be a nonempty list")
+    for request in reset:
+        if not isinstance(request, dict):
+            raise ValueError("race.reset entries must be mappings")
+        _request_spec(request)
+    successes = value.get("success_status", [200, 201, 204])
+    if (not isinstance(successes, list) or not successes
+            or any(type(status) is not int or not 200 <= status < 400 for status in successes)
+            or len(set(successes)) != len(successes)):
+        raise ValueError("race.success_status must be a unique nonempty list of 2xx/3xx statuses")
+    spread = value.get("max_spread_ms", 5)
+    if type(spread) not in (int, float) or isinstance(spread, bool) or not math.isfinite(spread) or spread <= 0:
+        raise ValueError("race.max_spread_ms must be finite and positive")
+    identity = value.get("idempotency")
+    if identity is not None:
+        _keys(identity, {"header", "mode"}, {"mode"})
+        if identity["mode"] not in {"same", "unique", "none"}:
+            raise ValueError("race.idempotency.mode must be same, unique or none")
+        header = identity.get("header", "Idempotency-Key")
+        if not isinstance(header, str) or not re.fullmatch(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+", header):
+            raise ValueError("race.idempotency.header must be a valid HTTP header name")
+        if identity["mode"] != "none" and not header:
+            raise ValueError("race.idempotency.header is required for same or unique mode")
+    invariant = value["invariant"]
+    _keys(invariant, {"max_successes", "ledger"})
+    if not set(invariant) & {"max_successes", "ledger"}:
+        raise ValueError("race.invariant requires max_successes or ledger")
+    if "max_successes" in invariant:
+        maximum = invariant["max_successes"]
+        if type(maximum) is not int or maximum < 1:
+            raise ValueError("race.invariant.max_successes must be a positive integer")
+    if "ledger" in invariant:
+        ledger = invariant["ledger"]
+        _keys(ledger, {"snapshot", "path", "delta_per_success", "max_total_effect"},
+              {"snapshot", "path", "delta_per_success", "max_total_effect"})
+        _request_spec(ledger["snapshot"])
+        if (not isinstance(ledger["path"], str) or not ledger["path"]
+                or any(char in ledger["path"] for char in "\r\n")):
+            raise ValueError("race.invariant.ledger.path must be a nonempty string")
+        for name in ("delta_per_success", "max_total_effect"):
+            number = ledger[name]
+            if (type(number) not in (int, float) or isinstance(number, bool)
+                    or not math.isfinite(number)):
+                raise ValueError(f"race.invariant.ledger.{name} must be finite")
+        if ledger["max_total_effect"] < 0:
+            raise ValueError("race.invariant.ledger.max_total_effect must be nonnegative")
+    if identity is not None and identity["mode"] == "unique" and "ledger" not in invariant:
+        raise ValueError("unique idempotency requires a ledger invariant")
+
+
 def _validate_rules(rules, *, require_mutating=True):
     if not isinstance(rules, list):
         raise ValueError("Rules must be a list")
@@ -167,7 +232,7 @@ def _validate_rules(rules, *, require_mutating=True):
                      "target_endpoints", "auth_contexts", "assertions", "parameters", "body",
                      "acceptable_status", "leak_detection", "controls", "confirm", "pagination",
                      "require_primary_canary", "scope", "require_owner_canary_in_baseline", "spec_check",
-                     "mutating", "verify", "restore"},
+                     "mutating", "verify", "restore", "race"},
               {"id", "name", "severity", "owasp_category", "cvss_score", "target_endpoints"})
         differential = "leak_detection" in rule
         mutating = rule.get("mutating", False)
@@ -213,6 +278,10 @@ def _validate_rules(rules, *, require_mutating=True):
                 raise ValueError("Mutating rules require restore")
             if "verify" in rule:
                 _verify_spec(rule["verify"])
+            if "race" in rule:
+                if "verify" in rule:
+                    raise ValueError("Race rules must use race, not verify")
+                _race_spec(rule["race"])
             restore = rule["restore"]
             if not isinstance(restore, list) or not restore:
                 raise ValueError("restore must be a nonempty list")
@@ -926,6 +995,139 @@ async def _execute_mutation(runtime, endpoint, inputs, forbidden, rule, variable
                              acceptable_status=rule.get("acceptable_status", [401, 403, 404]))
 
 
+def _race_config(race):
+    idempotency = race.get("idempotency", {"mode": "none", "header": "Idempotency-Key"})
+    return {
+        "requests": race.get("requests", 10),
+        "rounds": race.get("rounds", 5),
+        "sync": race.get("sync", "last_byte"),
+        "success_status": set(race.get("success_status", [200, 201, 204])),
+        "idempotency": {"mode": idempotency.get("mode", "none"),
+                        "header": idempotency.get("header", "Idempotency-Key")},
+        "max_spread_ms": race.get("max_spread_ms", 5),
+        "invariant": race["invariant"],
+    }
+
+
+def _race_identity(runtime, rule):
+    name = rule["race"]["identity"]
+    if name in {"primary", "forbidden"}:
+        return rule["auth_contexts"][name]
+    if name in runtime.contexts:
+        return name
+    raise _Stop("Race identity is not a configured context.", "error", "invalid_rule")
+
+
+async def _race_reset(runtime, race, primary, forbidden):
+    for request in race["reset"]:
+        try:
+            response = await runtime.custom_request(request, runtime.variables, primary, forbidden)
+        except _Stop:
+            return False
+        if not 200 <= response.status_code < 300:
+            return False
+    return True
+
+
+async def _race_snapshot(runtime, ledger, primary, forbidden):
+    try:
+        response = await runtime.custom_request(ledger["snapshot"], runtime.variables, primary, forbidden)
+        payload = response.json()
+        _json(payload)
+    except (_Stop, ValueError, TypeError, RecursionError):
+        return None
+    if not 200 <= response.status_code < 300:
+        return None
+    value = _lookup(payload, ledger["path"])
+    if (type(value) not in (int, float) or isinstance(value, bool)
+            or not math.isfinite(value)):
+        return None
+    return value
+
+
+async def _execute_race(runtime, endpoint, rule, variables, client, allowed_hosts):
+    race = _race_config(rule["race"])
+    auth = rule["auth_contexts"]
+    primary, forbidden = auth["primary"], auth["forbidden"]
+    identity = _race_identity(runtime, rule)
+    op = endpoint.get("operation_id")
+    rounds = []
+    reset_failed = False
+    sync_note = None
+    sent = {}
+    try:
+        inputs = await runtime.inputs(endpoint, rule, identity, (op,) if op else (), [0])
+        for _ in range(race["rounds"]):
+            if not await _race_reset(runtime, rule["race"], primary, forbidden):
+                reset_failed = True
+                break
+            ledger = race["invariant"].get("ledger")
+            initial = None
+            if ledger is not None:
+                initial = await _race_snapshot(runtime, ledger, primary, forbidden)
+                if initial is None:
+                    rounds.append({"spread_ms": 0.0, "accepted": 0,
+                                   "initial": None, "final": None,
+                                   "status_counts": {}, "verify_unavailable": True})
+                    break
+            payloads = []
+            same_key = secrets.token_urlsafe(24)
+            idempotency = race["idempotency"]
+            for _index in range(race["requests"]):
+                headers = dict(inputs["headers"])
+                if idempotency["mode"] != "none":
+                    headers[idempotency["header"]] = (
+                        same_key if idempotency["mode"] == "same"
+                        else secrets.token_urlsafe(24))
+                payload = {"method": endpoint["method"], "url": inputs["url"],
+                           "headers": headers, "params": copy.deepcopy(inputs["query"])}
+                if inputs["body"] is not _MISSING:
+                    payload["json"] = copy.deepcopy(inputs["body"])
+                payloads.append(payload)
+            try:
+                sent = await client.send_synchronized(
+                    payloads, mode=race["sync"], max_spread_ms=race["max_spread_ms"],
+                    inter_round_delay=0.05, allowed_hosts=allowed_hosts)
+            except UnsafeRequest:
+                raise _Stop("Race request blocked by the safety guard.", "skipped", "safety_blocked") from None
+            except (OSError, httpx.HTTPError):
+                raise _Stop("Synchronized race request failed.", "error", "execution_error") from None
+            sync_note = sent.get("note") if sent.get("note") in {
+                "h2_unavailable", "h2_coalesce_limit"} else sync_note
+            counts = {}
+            accepted = 0
+            for record in sent.get("responses", []):
+                if "error" in record:
+                    key = "timeout" if record["error"] == "timeout" else "500"
+                    counts[key] = counts.get(key, 0) + 1
+                    continue
+                status = record.get("status")
+                if type(status) is not int:
+                    counts["500"] = counts.get("500", 0) + 1
+                    continue
+                counts[str(status)] = counts.get(str(status), 0) + 1
+                if status in race["success_status"]:
+                    accepted += 1
+            final = None
+            verify_unavailable = False
+            if ledger is not None:
+                final = await _race_snapshot(runtime, ledger, primary, forbidden)
+                verify_unavailable = final is None
+            rounds.append({"spread_ms": sent.get("spread_ms", 0.0),
+                           "accepted": accepted, "initial": initial, "final": final,
+                           "status_counts": counts,
+                           "verify_unavailable": verify_unavailable})
+            if verify_unavailable:
+                break
+    finally:
+        await _restore_mutation(runtime, rule, variables, primary, forbidden)
+    return evaluate_race(rounds=rounds, requests=race["requests"],
+                         max_spread_ms=race["max_spread_ms"],
+                         min_rounds=5, sync_mode=sent.get("mode", race["sync"]),
+                         invariant=race["invariant"], idempotency=race["idempotency"],
+                         reset_failed=reset_failed, sync_note=sync_note)
+
+
 def _differential_config(rule, variables):
     leak = rule["leak_detection"]
     canaries = _expand(leak.get("canaries", []), variables)
@@ -1187,6 +1389,11 @@ async def run_rules(inventory: dict, rules: list[dict], client,
                                                      inventory["base_url"])
                     if missing:
                         raise _Stop(f"Mutation blocked: {missing}.", "skipped", "mutation_blocked")
+                    if "race" in rule:
+                        result.update(await _execute_race(runtime, endpoint, rule,
+                                                          runtime.variables, client, allowed_hosts))
+                        results.append(result)
+                        continue
                     marker = secrets.token_urlsafe(24)
                     original_variables = runtime.variables
                     runtime.variables = {**original_variables, "marker": marker}

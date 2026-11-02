@@ -228,6 +228,36 @@ class GuardedClient:
                     self._feedback(response)
                 self._condition.notify_all()
 
+    async def _take_tokens(self, count: int) -> None:
+        """Consume rate/cooldown admission for raw synchronized traffic."""
+        for _ in range(count):
+            async with self._condition:
+                while True:
+                    if self._closed:
+                        raise RuntimeError("GuardedClient is closed")
+                    now = monotonic()
+                    delay = max(self._bucket._delay(now), self._cooldown_until - now)
+                    if delay <= 0:
+                        self._bucket._tokens -= 1
+                        break
+                    await _wait(self._condition, delay)
+
+    async def send_synchronized(self, requests, *, mode="last_byte",
+                                max_spread_ms=5.0, inter_round_delay=0.05,
+                                allowed_hosts=()) -> dict:
+        """Send requests with one release barrier and return status records.
+
+        ``last_byte`` uses raw HTTP/1.1 sockets and withholds each request's
+        final byte. ``h2_single_packet`` is optional and falls back to
+        ``last_byte`` when the h2 package or HTTP/2 negotiation is unavailable.
+        ``burst`` preserves the legacy concurrent-request behavior.
+        """
+        from .sync import send_synchronized
+        return await send_synchronized(self, requests, mode=mode,
+                                       max_spread_ms=max_spread_ms,
+                                       inter_round_delay=inter_round_delay,
+                                       allowed_hosts=allowed_hosts)
+
     async def get(self, url, **kwargs) -> httpx.Response:
         return await self.request("GET", url, **kwargs)
 

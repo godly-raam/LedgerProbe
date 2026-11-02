@@ -1,0 +1,37 @@
+id: authz-race-coupon
+name: Concurrent coupon redemption must consume the coupon once
+severity: HIGH
+owasp_category: API6:2023
+cvss_score: 8.1
+target_endpoints:
+  - path: /race/coupon/redeem
+    method: POST
+auth_contexts:
+  primary: owner
+  forbidden: other
+mutating: true
+race:
+  requests: 10
+  rounds: 5
+  sync: last_byte
+  identity: other
+  reset:
+    - method: POST
+      path: /race/reset
+      auth: none
+  success_status: [200]
+  max_spread_ms: 5
+  invariant:
+    max_successes: 1
+    ledger:
+      snapshot:
+        method: GET
+        path: /race/coupon
+        auth: none
+      path: uses
+      delta_per_success: 1
+      max_total_effect: 1
+restore:
+  - method: POST
+    path: /race/reset
+    auth: none

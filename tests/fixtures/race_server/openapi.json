@@ -1,0 +1,31 @@
+{
+  "openapi": "3.0.3",
+  "info": {"title": "LedgerProbe Race Fixture", "version": "1.0"},
+  "paths": {
+    "/race/wallet/spend": {
+      "post": {
+        "requestBody": {
+          "required": true,
+          "content": {"application/json": {"schema": {"type": "object", "required": ["amount"], "properties": {"amount": {"type": "integer"}}}}}
+        },
+        "responses": {"200": {"description": "accepted"}, "409": {"description": "rejected"}}
+      }
+    },
+    "/race/coupon/redeem": {
+      "post": {"responses": {"200": {"description": "accepted"}, "409": {"description": "rejected"}}}
+    },
+    "/race/idempotency/spend": {
+      "post": {
+        "requestBody": {
+          "required": true,
+          "content": {"application/json": {"schema": {"type": "object", "required": ["amount"], "properties": {"amount": {"type": "integer"}}}}}
+        },
+        "responses": {"200": {"description": "accepted"}, "409": {"description": "rejected"}}
+      }
+    },
+    "/race/wallet": {"get": {"responses": {"200": {"description": "wallet"}}}},
+    "/race/coupon": {"get": {"responses": {"200": {"description": "coupon"}}}},
+    "/race/reset": {"post": {"responses": {"200": {"description": "reset"}}}},
+    "/race/health": {"get": {"responses": {"200": {"description": "health"}}}}
+  }
+}

@@ -279,6 +279,116 @@ def evaluate_mutation(*, mutation: dict, verification: dict | None = None,
                   "verify_unavailable")
 
 
+def evaluate_race(*, rounds, requests: int, max_spread_ms: float,
+                  min_rounds: int = 5, sync_mode: str = "last_byte",
+                  invariant: dict | None = None, idempotency: dict | None = None,
+                  reset_failed: bool = False, restore_failed: bool = False,
+                  error_threshold: int | None = None, sync_note: str | None = None) -> dict:
+    """Evaluate sanitized race rounds without I/O or raw request data.
+
+    A round is ``{"spread_ms": float, "accepted": int, "initial": number|None,
+    "final": number|None, "status_counts": {str: int}}``. Ledger values and
+    request IDs never appear in the result.
+    """
+    rounds = list(rounds)
+    invariant = invariant or {}
+    idempotency = idempotency or {}
+    mode = idempotency.get("mode", "none")
+    total_requests = len(rounds) * requests
+    threshold = error_threshold if error_threshold is not None else max(1, total_requests // 4)
+    strong = [round_ for round_ in rounds if round_.get("spread_ms", float("inf")) <= max_spread_ms]
+    accepted_counts = [int(round_.get("accepted", 0)) for round_ in rounds]
+    rate_limited = sum(int(round_.get("status_counts", {}).get("429", 0)) for round_ in rounds)
+    server_errors = sum(sum(count for status, count in round_.get("status_counts", {}).items()
+                            if str(status).isdigit() and 500 <= int(status) < 600)
+                        for round_ in rounds)
+    timeouts = sum(int(round_.get("status_counts", {}).get("timeout", 0)) for round_ in rounds)
+    unavailable = sum(1 for round_ in rounds if round_.get("verify_unavailable"))
+    ledger = invariant.get("ledger")
+    max_successes = invariant.get("max_successes")
+    violating = []
+    for round_ in rounds:
+        if round_.get("verify_unavailable"):
+            continue
+        accepted = int(round_.get("accepted", 0))
+        bad = max_successes is not None and accepted > max_successes
+        if mode == "same" and accepted != 1:
+            bad = True
+        if ledger:
+            initial, final = round_.get("initial"), round_.get("final")
+            if initial is None or final is None:
+                continue
+            delta = final - initial
+            if (abs(delta) > ledger["max_total_effect"]
+                    or delta != ledger["delta_per_success"] * accepted):
+                bad = True
+        if bad:
+            violating.append(round_)
+
+    spreads = sorted(round_.get("spread_ms", 0.0) for round_ in rounds)
+    median_spread = spreads[len(spreads) // 2] if spreads else 0.0
+    first_violation = next((index + 1 for index, round_ in enumerate(rounds)
+                            if any(round_ is item for item in violating)), None)
+    evidence = {
+        "rounds_executed": len(rounds), "strong_rounds": len(strong),
+        "violating_rounds": len(violating),
+        "hit_rate": len(violating) / len(rounds) if rounds else 0.0,
+        "median_spread_ms": median_spread, "accepted_counts": accepted_counts,
+        "sync_mode": sync_mode, "idempotency_mode": mode,
+        "rate_limited_count": rate_limited, "server_error_count": server_errors,
+        "timeout_count": timeouts, "verify_unavailable_count": unavailable,
+    }
+    if first_violation is not None:
+        evidence["first_violation_round"] = first_violation
+    for key in ("max_successes", "max_total_effect"):
+        value = invariant.get(key) if key == "max_successes" else (ledger or {}).get(key)
+        if type(value) in (int, float) and not isinstance(value, bool):
+            evidence[key] = value
+    if reset_failed:
+        evidence["reset_failed"] = True
+    if restore_failed:
+        evidence["restore_failed"] = True
+    if sync_note in {"weak_sync_mode", "h2_unavailable", "h2_coalesce_limit"}:
+        evidence["sync_note"] = sync_note
+
+    def result(status, message, reason=None, note=None, confidence="reduced"):
+        verdict = {"passed": "PASS", "failed": "FAIL", "inconclusive": "INCONCLUSIVE",
+                   "error": "ERROR"}[status]
+        output = _output(status, verdict, message, reason=reason, note=note,
+                         confidence=confidence, evidence=evidence)
+        return output
+
+    if restore_failed:
+        return result("error", "State restoration failed after the race check.", "restore_failed")
+    if reset_failed:
+        return result("inconclusive", "Race reset failed before a round.", "reset_failed")
+    if violating:
+        return result("failed",
+                      f"Race invariant violated in {len(violating)} of {len(rounds)} rounds.",
+                      "race_invariant_violated", confidence="high")
+    if unavailable:
+        return result("inconclusive", "Race state verification was unavailable.",
+                      "verify_unavailable")
+    if timeouts > threshold:
+        return result("inconclusive", "Race requests timed out above the allowed threshold.",
+                      "timeout")
+    if server_errors > threshold:
+        return result("inconclusive", "Race requests received server errors above the allowed threshold.",
+                      "server_error")
+    if rate_limited > threshold:
+        return result("inconclusive", "Race requests were rate limited above the allowed threshold.",
+                      "rate_limited")
+    if len(strong) < min_rounds or len(strong) * 2 < len(rounds):
+        return result("inconclusive", "Fewer than half of the race rounds were strongly synchronized.",
+                      "weak_synchronization")
+    note = sync_note or "no_violation_observed"
+    if sync_mode == "burst" and sync_note is None:
+        note = "weak_sync_mode"
+    return result("passed",
+                  f"No race invariant violation observed in {len(rounds)} rounds.",
+                  note=note, confidence="reduced" if sync_mode == "burst" else "high")
+
+
 def evaluate_differential(*, baseline: dict, forbidden: dict,
                           acceptable_status=(401, 403, 404), canaries=(),
                           min_unique_leaf_values: int = 2, ignore_fields=(),
