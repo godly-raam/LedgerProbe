@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from pkg.rules.verdict import evaluate_differential
+from pkg.rules.verdict import evaluate_differential, evaluate_scoped
 
 OWNER = {"id": "object-a", "label": "owner-only-marker", "currency": "USD", "state": "active"}
 GENERIC = {"currency": "USD", "state": "active"}
@@ -55,7 +55,7 @@ def evaluate(**overrides):
     ({"forbidden": observation(302)}, "INCONCLUSIVE", "unexpected_status", None),
     ({"nonexistent": None, "nonexistent_skipped": True}, "INCONCLUSIVE", "ambiguous_2xx", None),
     ({"nonexistent": None, "nonexistent_skipped": True, "canaries": ["owner-only-marker"]}, "FAIL", "leak_detected", None),
-    ({"nonexistent": observation(503)}, "INCONCLUSIVE", "server_error", None),
+    ({"nonexistent": observation(503)}, "INCONCLUSIVE", "control_unusable", None),
     ({"unauthenticated": observation(429)}, "INCONCLUSIVE", "rate_limited", None),
     ({"confirm_responses": [{"error": "timeout"}]}, "INCONCLUSIVE", "timeout", None),
     ({"confirm_responses": [observation(429)]}, "INCONCLUSIVE", "rate_limited", None),
@@ -188,3 +188,95 @@ def test_explicit_zero_confirms_and_reduced_confidence():
     assert result["verdict"] == "FAIL"
     assert result["confidence"] == "reduced"
     assert result["evidence"]["nonexistent_skipped"] is True
+
+
+@pytest.mark.parametrize("control", [
+    observation(500), observation(503), observation(429), {"error": "timeout"},
+])
+def test_unusable_nonexistent_control_is_not_server_error(control):
+    result = evaluate(nonexistent=control)
+    assert (result["verdict"], result["reason"]) == ("INCONCLUSIVE", "control_unusable")
+    assert result["evidence"]["control_unusable"] is True
+
+
+def test_unusable_control_with_reproduced_canary_is_reduced_fail():
+    result = evaluate(nonexistent=observation(500), canaries=["owner-only-marker"])
+    assert (result["verdict"], result["reason"]) == ("FAIL", "leak_detected")
+    assert result["note"] == "control_unusable"
+    assert result["confidence"] == "reduced"
+    assert result["evidence"]["confirm_runs"] == 2
+
+
+def test_unusable_control_without_canary_does_not_use_overlap():
+    result = evaluate(nonexistent=observation(500))
+    assert (result["verdict"], result["reason"]) == ("INCONCLUSIVE", "control_unusable")
+    assert result["evidence"]["control_unusable"] is True
+    assert result["evidence"]["overlap_count"] == len(set(OWNER.values()))
+
+
+def test_forbidden_and_confirmation_server_errors_keep_server_error():
+    assert evaluate(forbidden=observation(500))["reason"] == "server_error"
+    result = evaluate(nonexistent=observation(500), canaries=["owner-only-marker"],
+                      confirm_responses=[observation(500), observation(OWNER)])
+    assert result["reason"] == "server_error"
+
+
+def scoped(**overrides):
+    params = {"scope": "caller", "baseline": observation(body=OWNER),
+              "forbidden": observation(body={"id": "object-b", "currency": "USD"}),
+              "canaries": ["owner-only-marker"], "min_unique_leaf_values": 3,
+              "require_owner_canary_in_baseline": True,
+              "confirm_responses": []}
+    params.update(overrides)
+    return evaluate_scoped(**params)
+
+
+def test_caller_scope_cross_contamination_fails():
+    result = scoped(forbidden=observation(body=OWNER),
+                    confirm_responses=[observation(body=OWNER)] * 2)
+    assert (result["verdict"], result.get("reason")) == ("FAIL", "leak_detected")
+    assert result["evidence"]["canary_matched"] is True
+
+
+def test_caller_scope_other_identity_data_passes():
+    result = scoped()
+    assert (result["verdict"], result.get("reason")) == ("PASS", None)
+    assert result["note"] == "caller_scoped"
+
+
+def test_caller_scope_empty_response_is_ambiguous():
+    result = scoped(forbidden=observation(body={}), confirm_responses=[])
+    assert (result["verdict"], result["reason"]) == ("INCONCLUSIVE", "ambiguous_2xx")
+
+
+def test_caller_scope_requires_owner_canary_in_baseline():
+    result = scoped(baseline=observation(body=GENERIC))
+    assert (result["verdict"], result["reason"]) == ("ERROR", "baseline_missing_canary")
+
+
+def test_caller_scope_rejects_unparseable_response():
+    result = scoped(forbidden=observation(status=200), confirm_responses=[])
+    assert (result["verdict"], result.get("reason")) == ("INCONCLUSIVE", "ambiguous_2xx")
+
+
+def test_shared_scope_common_catalogue_passes():
+    result = scoped(scope="shared", baseline=observation(body=GENERIC),
+                    forbidden=observation(body=GENERIC), canaries=["owner-only-marker"],
+                    require_owner_canary_in_baseline=False, confirm_responses=[])
+    assert (result["verdict"], result.get("reason")) == ("PASS", None)
+    assert result["note"] == "shared_data"
+
+
+def test_shared_scope_owner_canary_leak_fails():
+    result = scoped(scope="shared", baseline=observation(body=OWNER),
+                    forbidden=observation(body=OWNER), require_owner_canary_in_baseline=False,
+                    confirm_responses=[observation(body=OWNER)] * 2)
+    assert (result["verdict"], result.get("reason")) == ("FAIL", "leak_detected")
+    assert result.get("note") is None
+
+
+def test_shared_scope_owner_canary_absent_from_other_is_ambiguous():
+    result = scoped(scope="shared", baseline=observation(body=OWNER),
+                    forbidden=observation(body=GENERIC), require_owner_canary_in_baseline=False,
+                    confirm_responses=[])
+    assert (result["verdict"], result.get("reason")) == ("INCONCLUSIVE", "ambiguous_2xx")

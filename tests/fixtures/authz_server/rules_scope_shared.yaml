@@ -1,0 +1,21 @@
+id: authz-shared-scope
+name: Shared catalogue differential audit
+severity: MEDIUM
+owasp_category: API9:2023
+cvss_score: 3.1
+target_endpoints:
+  - path: /api/v1/shared
+    method: GET
+auth_contexts:
+  primary: owner
+  forbidden: other
+acceptable_status: [401, 403, 404]
+scope: shared
+leak_detection:
+  canaries: ["{{canary_value}}"]
+  min_unique_leaf_values: 3
+  ignore_fields: [detail]
+controls:
+  nonexistent_object: false
+  unauthenticated: false
+confirm: 2

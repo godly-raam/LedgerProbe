@@ -256,3 +256,95 @@ paginated_list_page_2_unwalked:
   expected_note: null
   rule_file: rules_paginated_one.yaml
   description: "One-page scan cannot assess owner data only present on page two"
+
+control_500_with_canary_leak:
+  category: vulnerable
+  expected_verdict: FAIL
+  expected_reason: leak_detected
+  expected_note: control_unusable
+  expected_confidence: reduced
+  rule_file: rules_objects.yaml
+  description: "Nonexistent control returns 500, but the forbidden response has a reproducible owner canary"
+
+control_500_no_canary:
+  category: tricky
+  expected_verdict: INCONCLUSIVE
+  expected_reason: control_unusable
+  expected_note: null
+  rule_file: rules_objects.yaml
+  description: "Nonexistent control returns 500 and the forbidden response has no owner canary"
+
+control_429:
+  category: tricky
+  expected_verdict: INCONCLUSIVE
+  expected_reason: control_unusable
+  expected_note: null
+  rule_file: rules_objects.yaml
+  description: "Nonexistent control is rate limited instead of becoming a verdict-level server error"
+
+control_timeout:
+  category: tricky
+  expected_verdict: INCONCLUSIVE
+  expected_reason: control_unusable
+  expected_note: null
+  rule_file: rules_objects.yaml
+  description: "Nonexistent control times out without masking a forbidden server error"
+
+forbidden_500:
+  category: tricky
+  expected_verdict: INCONCLUSIVE
+  expected_reason: server_error
+  expected_note: null
+  rule_file: rules_objects.yaml
+  description: "A server error on the forbidden request remains server_error"
+
+caller_scoped_cross_contamination:
+  category: vulnerable
+  expected_verdict: FAIL
+  expected_reason: leak_detected
+  expected_note: null
+  rule_file: rules_scope_caller.yaml
+  description: "Caller-scoped endpoint returns owner data to another identity"
+
+caller_scoped_ok:
+  category: safe
+  expected_verdict: PASS
+  expected_reason: null
+  expected_note: caller_scoped
+  rule_file: rules_scope_caller.yaml
+  description: "Caller-scoped endpoint returns each identity its own profile"
+
+shared_ok:
+  category: safe
+  expected_verdict: PASS
+  expected_reason: null
+  expected_note: shared_data
+  rule_file: rules_scope_shared.yaml
+  description: "Shared catalogue contains no owner canary"
+
+shared_leaks_owner_data:
+  category: vulnerable
+  expected_verdict: FAIL
+  expected_reason: leak_detected
+  expected_note: null
+  rule_file: rules_scope_shared.yaml
+  description: "Shared endpoint exposes the owner canary to another identity"
+
+endpoint_not_in_spec:
+  category: tricky
+  spec_check: strict
+  expected_verdict: SKIPPED
+  expected_reason: endpoint_absent
+  expected_note: null
+  rule_file: rules_missing.yaml
+  description: "Strict spec check skips a rule whose path is absent"
+
+endpoint_not_in_spec_warn:
+  category: tricky
+  spec_check: warn
+  expected_verdict: PASS
+  expected_reason: null
+  expected_note: null
+  expected_spec_drift: /api/v1/not-in-spec/{id}
+  rule_file: rules_missing.yaml
+  description: "Warn spec check executes the path and reports spec_drift"

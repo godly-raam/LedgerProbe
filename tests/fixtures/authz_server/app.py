@@ -123,6 +123,40 @@ async def handle_object(request: Request) -> Response:
     identity = get_identity(request)
     obj_id = request.path_params.get("id")
 
+    owner_data = {
+        "id": "obj-owner-1",
+        "owner_id": "user_owner",
+        "canary": "canary-secret-owner-9988",
+        **SEEDED_DATA["static_fields"],
+    }
+
+    if base_profile in {"control_500_with_canary_leak", "control_500_no_canary",
+                         "control_429", "control_timeout"}:
+        if identity is None:
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        if obj_id != "obj-owner-1":
+            if base_profile == "control_timeout":
+                await asyncio.sleep(app_state.timeout_delay)
+                return JSONResponse({"error": "timed out"}, status_code=200)
+            if base_profile == "control_429":
+                return JSONResponse({"error": "rate limited"}, status_code=429,
+                                    headers={"Retry-After": "0.01"})
+            return JSONResponse({"error": "control failure"}, status_code=500)
+        if base_profile == "control_500_with_canary_leak" and identity == "other":
+            return JSONResponse(owner_data, status_code=200)
+        if base_profile == "control_500_no_canary" and identity == "other":
+            return JSONResponse({"status": "ok", "service": "authz-service"}, status_code=200)
+        if base_profile in {"control_429", "control_timeout"} and identity == "other":
+            return JSONResponse({"status": "ok", "service": "authz-service"}, status_code=200)
+        return JSONResponse(owner_data, status_code=200)
+
+    if base_profile == "forbidden_500":
+        if identity == "owner":
+            return JSONResponse(owner_data, status_code=200)
+        if identity == "other":
+            return JSONResponse({"error": "server failure"}, status_code=500)
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+
     # 1. Tricky profiles evaluated before/independent of standard object dispatch
     if base_profile == "flaky_500":
         app_state.request_count += 1
@@ -405,6 +439,41 @@ async def handle_paginated(request: Request) -> Response:
                          "items": [{"id": "item-pub-header", "name": "Public Catalog"}]}, status_code=200)
 
 
+async def handle_profile(request: Request) -> Response:
+    """Caller-scoped profile fixture."""
+    identity = get_identity(request)
+    if identity is None:
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    owner_data = {"id": "obj-owner-1", "owner_id": "user_owner",
+                  "canary": "canary-secret-owner-9988", "email": "owner@example.test"}
+    if identity == "owner" or get_profile(request) == "caller_scoped_cross_contamination":
+        return JSONResponse(owner_data, status_code=200)
+    return JSONResponse({"id": "obj-other-1", "owner_id": "user_other",
+                         "canary": "canary-secret-other-1122", "email": "other@example.test"},
+                        status_code=200)
+
+
+async def handle_shared(request: Request) -> Response:
+    """Shared catalogue fixture; one profile deliberately leaks owner data."""
+    identity = get_identity(request)
+    if identity is None:
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    if get_profile(request) == "shared_leaks_owner_data":
+        return JSONResponse({"id": "obj-owner-1", "owner_id": "user_owner",
+                             "canary": "canary-secret-owner-9988"}, status_code=200)
+    return JSONResponse({"catalog": ["public-1"], "status": "ok", "region": "US-EAST"},
+                        status_code=200)
+
+
+async def handle_not_in_spec(request: Request) -> Response:
+    """Route intentionally omitted from the fixture OpenAPI document."""
+    identity = get_identity(request)
+    if identity == "owner":
+        return JSONResponse({"id": "obj-owner-1", "canary": "canary-secret-owner-9988"},
+                            status_code=200)
+    return JSONResponse({"error": "forbidden"}, status_code=403)
+
+
 def create_app(profile: str | None = None, fixed: bool = False, timeout_delay: float = 0.2) -> Starlette:
     """Construct an ASGI application instance configured with the specified profile."""
     app = Starlette(routes=[
@@ -412,6 +481,9 @@ def create_app(profile: str | None = None, fixed: bool = False, timeout_delay: f
         Route("/api/v1/objects/{id}", handle_object, methods=["GET"]),
         Route("/api/v1/items", handle_items, methods=["GET"]),
         Route("/api/v1/paginated/{id}", handle_paginated, methods=["GET"]),
+        Route("/api/v1/profile", handle_profile, methods=["GET"]),
+        Route("/api/v1/shared", handle_shared, methods=["GET"]),
+        Route("/api/v1/not-in-spec/{id}", handle_not_in_spec, methods=["GET"]),
     ])
     app.state.authz = AuthzServerState(profile=profile, fixed=fixed, timeout_delay=timeout_delay)
     return app

@@ -16,7 +16,7 @@ import httpx
 import yaml
 
 from ..guardrails import UnsafeRequest
-from .verdict import _typed, _values, evaluate_differential
+from .verdict import _typed, _values, evaluate_differential, evaluate_scoped
 
 __all__ = ["load_rules", "run_rules"]
 
@@ -88,11 +88,16 @@ def _validate_rules(rules):
     for rule in rules:
         _keys(rule, {"id", "name", "severity", "owasp_category", "cvss_score",
                      "target_endpoints", "auth_contexts", "assertions", "parameters", "body",
-                     "acceptable_status", "leak_detection", "controls", "confirm", "pagination", "require_primary_canary"},
+                     "acceptable_status", "leak_detection", "controls", "confirm", "pagination",
+                     "require_primary_canary", "scope", "require_owner_canary_in_baseline", "spec_check"},
               {"id", "name", "severity", "owasp_category", "cvss_score", "target_endpoints"})
         differential = "leak_detection" in rule
-        if not differential and set(rule) & {"acceptable_status", "controls", "confirm", "pagination", "require_primary_canary"}:
+        if not differential and set(rule) & {"acceptable_status", "controls", "confirm", "pagination",
+                                            "require_primary_canary", "scope",
+                                            "require_owner_canary_in_baseline"}:
             raise ValueError("Differential fields require leak_detection")
+        if "spec_check" in rule and rule["spec_check"] not in {"strict", "warn"}:
+            raise ValueError("spec_check must be strict or warn")
         if not differential and "assertions" not in rule:
             raise ValueError("Legacy rules require assertions")
         if differential and "assertions" in rule:
@@ -200,6 +205,18 @@ def _validate_rules(rules):
                     raise ValueError("pagination requires a parameter name and max_pages from 1 to 100")
             if "require_primary_canary" in rule and type(rule["require_primary_canary"]) is not bool:
                 raise ValueError("require_primary_canary must be boolean")
+            scope = rule.get("scope", "object")
+            if scope not in {"object", "caller", "shared"}:
+                raise ValueError("scope must be object, caller or shared")
+            require_owner_canary = rule.get("require_owner_canary_in_baseline", False)
+            if type(require_owner_canary) is not bool:
+                raise ValueError("require_owner_canary_in_baseline must be boolean")
+            if require_owner_canary and not canaries:
+                raise ValueError("require_owner_canary_in_baseline requires leak_detection.canaries")
+            if scope == "caller" and require_owner_canary is not True:
+                raise ValueError("caller scope requires require_owner_canary_in_baseline: true")
+            if scope == "caller" and not canaries:
+                raise ValueError("caller scope requires leak_detection.canaries")
 
 
 def load_rules(paths: Iterable[str]) -> list[dict[str, Any]]:
@@ -583,7 +600,9 @@ def _differential_config(rule, variables):
         raise _Stop("Canary values must resolve to scalar JSON values.", reason="invalid_canary")
     return {"acceptable_status": rule.get("acceptable_status", [401, 403, 404]),
             "canaries": canaries, "min_unique_leaf_values": leak.get("min_unique_leaf_values", 2),
-            "ignore_fields": leak.get("ignore_fields", [])}
+            "ignore_fields": leak.get("ignore_fields", []),
+            "scope": rule.get("scope", "object"),
+            "require_owner_canary_in_baseline": rule.get("require_owner_canary_in_baseline", False)}
 
 
 def _nonexistent_value(schema, current):
@@ -639,6 +658,14 @@ def _nonexistent_value(schema, current):
     return _MISSING
 
 
+def _synthetic_endpoint(inventory, target):
+    """Build the minimum endpoint record needed to execute a rule absent from the spec."""
+    parameters = [{"name": name, "in": "path", "required": True, "schema": {"type": "string"}}
+                  for name in _PATH_PARAMETER.findall(target["path"])]
+    return {"path": target["path"], "method": target["method"], "parameters": parameters,
+            "request_body": None, "operation_id": None, "base_url": inventory["base_url"]}
+
+
 def _nonexistent_inputs(endpoint, inputs, base_url):
     parameters = [p for p in endpoint.get("parameters", []) if p.get("in") in {"path", "query"}
                   and (p.get("name") == "id" or p.get("name", "").endswith("_id"))]
@@ -663,7 +690,40 @@ def _nonexistent_inputs(endpoint, inputs, base_url):
     return copied
 
 
+async def _scoped_differential_result(runtime, endpoint, inputs, forbidden, rule, baseline, comparison):
+    """Run a caller/shared rule without object-control traffic."""
+    async def observe(context):
+        try:
+            response = await runtime.request(endpoint, inputs, context, timeout_is_inconclusive=True)
+            return _response_record(response)
+        except _Stop as exc:
+            if exc.reason == "timeout":
+                return {"error": "timeout"}
+            raise
+
+    baseline_record = _response_record(baseline)
+    forbidden_record = await observe(forbidden)
+    evaluate = {"scope": comparison["scope"], "baseline": baseline_record,
+                "forbidden": forbidden_record, "acceptable_status": comparison["acceptable_status"],
+                "canaries": comparison["canaries"],
+                "min_unique_leaf_values": comparison["min_unique_leaf_values"],
+                "ignore_fields": comparison["ignore_fields"],
+                "require_owner_canary_in_baseline": comparison["require_owner_canary_in_baseline"]}
+    provisional = evaluate_scoped(confirm=0, **evaluate)
+    confirmations = []
+    if provisional["status"] == "failed":
+        for _ in range(rule.get("confirm", 2)):
+            observation = await observe(forbidden)
+            confirmations.append(observation)
+            if observation.get("error") or observation.get("status") == 429 or observation.get("status", 0) >= 500:
+                break
+    return evaluate_scoped(confirm=rule.get("confirm", 2), confirm_responses=confirmations, **evaluate)
+
+
 async def _differential_result(runtime, endpoint, inputs, forbidden, rule, baseline, comparison):
+    if comparison.get("scope", "object") != "object":
+        return await _scoped_differential_result(runtime, endpoint, inputs, forbidden, rule, baseline, comparison)
+
     async def observe(request_inputs, context):
         try:
             response = await runtime.request(endpoint, request_inputs, context, timeout_is_inconclusive=True)
@@ -675,7 +735,11 @@ async def _differential_result(runtime, endpoint, inputs, forbidden, rule, basel
 
     baseline_record = _response_record(baseline)
     forbidden_record = await observe(inputs, forbidden)
-    evaluate = {"baseline": baseline_record, "forbidden": forbidden_record, **comparison}
+    evaluate = {"baseline": baseline_record, "forbidden": forbidden_record,
+                "acceptable_status": comparison["acceptable_status"],
+                "canaries": comparison["canaries"],
+                "min_unique_leaf_values": comparison["min_unique_leaf_values"],
+                "ignore_fields": comparison["ignore_fields"]}
     # Overload and unsupported statuses need no extra traffic. Accepted denials
     # still run the unauthenticated control to detect public owner-data leaks.
     status = forbidden_record.get("status", 0)
@@ -708,13 +772,16 @@ async def _differential_result(runtime, endpoint, inputs, forbidden, rule, basel
 
 
 async def run_rules(inventory: dict, rules: list[dict], client,
-                    contexts: dict | None = None, variables: dict | None = None) -> list[dict]:
+                    contexts: dict | None = None, variables: dict | None = None,
+                    spec_check: str = "strict") -> list[dict]:
     """Execute selected rules through an async guarded client; return redacted results.
 
     Invalid rules/context/variable configuration raises ValueError before any HTTP.
     Per-endpoint resolution, transport and baseline failures become result records.
     """
     _validate_rules(rules)
+    if spec_check not in {"strict", "warn"}:
+        raise ValueError("spec_check must be strict or warn")
     contexts = {} if contexts is None else contexts
     variables = {} if variables is None else variables
     if not isinstance(contexts, dict) or not isinstance(variables, dict):
@@ -743,13 +810,24 @@ async def run_rules(inventory: dict, rules: list[dict], client,
             result.update(rule_id=rule["id"], severity=rule["severity"].lower(),
                           path=target["path"], method=target["method"])
             try:
+                effective_spec_check = rule.get("spec_check", spec_check)
+                if effective_spec_check not in {"strict", "warn"}:
+                    raise ValueError("spec_check must be strict or warn")
                 matches = [e for e in inventory["endpoints"]
                            if e["path"] == target["path"] and e["method"] == target["method"]]
+                spec_drift = None
                 if not matches:
-                    raise _Stop("Selected endpoint is absent from inventory.", "skipped", "endpoint_absent")
-                if len(matches) != 1:
-                    raise _Stop("Selected endpoint is ambiguous in inventory.")
-                endpoint = matches[0]
+                    if effective_spec_check == "strict":
+                        raise _Stop("Selected endpoint is absent from inventory; rerun with --spec-check warn to execute it.",
+                                    "skipped", "endpoint_absent")
+                    endpoint = _synthetic_endpoint(inventory, target)
+                    spec_drift = target["path"]
+                else:
+                    if len(matches) != 1:
+                        raise _Stop("Selected endpoint is ambiguous in inventory.")
+                    endpoint = matches[0]
+                if spec_drift:
+                    result["spec_drift"] = spec_drift
                 differential = "leak_detection" in rule
                 comparison = _differential_config(rule, variables) if differential else None
                 auth = rule.get("auth_contexts", {})
@@ -780,7 +858,7 @@ async def run_rules(inventory: dict, rules: list[dict], client,
                                     "error", "baseline_not_2xx")
                     runtime.remember(endpoint, baseline, primary)
                 if differential:
-                    if rule.get("require_primary_canary"):
+                    if rule.get("require_primary_canary") or comparison.get("require_owner_canary_in_baseline"):
                         try:
                             baseline_values = _values(_response_record(baseline), set(comparison["ignore_fields"]))
                         except Exception:

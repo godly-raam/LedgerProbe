@@ -57,6 +57,8 @@ def arguments(argv=None) -> argparse.Namespace:
     parser.add_argument("--read-only", action="store_true", help="block all methods except GET/HEAD/OPTIONS")
     parser.add_argument("--fail-on-inconclusive", action="store_true",
                         help="return exit 1 when executed checks are inconclusive")
+    parser.add_argument("--spec-check", choices=("strict", "warn"), default="strict",
+                        help="strict skips endpoints absent from the spec; warn executes them and reports spec_drift")
     parser.add_argument("--allow-mutation", action="append", type=mutation, default=[], metavar="METHOD:/path")
     return parser.parse_args(argv)
 
@@ -105,7 +107,7 @@ async def execute(args: argparse.Namespace) -> int:
             for endpoint in inventory["endpoints"]:
                 endpoint.pop("base_url", None)
         print(f"[*] {len(inventory['endpoints'])} endpoints; {len(inventory['graph'])} dependency candidates")
-        results = await run_rules(inventory, rules, client, **inputs)
+        results = await run_rules(inventory, rules, client, spec_check=args.spec_check, **inputs)
     source_uri = None
     if urlsplit(args.spec).scheme not in {"http", "https"}:
         try:
@@ -117,6 +119,8 @@ async def execute(args: argparse.Namespace) -> int:
         write_junit(results, args.junit)
     counts = Counter(result["status"] for result in results)
     for result in results:
+        if result.get("spec_drift"):
+            print(f"[!] spec_drift: {result['spec_drift']} is absent from the spec; executed because --spec-check warn")
         print(f"[{result['status']}] {result['rule_id']} {result['method']} {result['path']}: {result['message']}")
     print(f"[+] SARIF: {args.sarif}; {dict(counts)}")
     if webhooks:

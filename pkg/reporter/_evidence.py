@@ -4,7 +4,7 @@ import re
 _REASONS = {"unauthenticated_leak", "leak_detected", "assertion_failed", "baseline_not_2xx", "baseline_timeout", "baseline_missing_canary",
             "rate_limited", "server_error", "timeout", "not_reproducible", "ambiguous_2xx",
             "unexpected_status", "invalid_rule", "invalid_canary", "execution_error",
-            "safety_blocked", "endpoint_absent", "invalid_control"}
+            "safety_blocked", "endpoint_absent", "invalid_control", "control_unusable"}
 
 
 def result_properties(result):
@@ -13,9 +13,11 @@ def result_properties(result):
         properties["reason"] = result["reason"]
     for name, allowed in (("verdict", {"PASS", "FAIL", "ERROR", "INCONCLUSIVE", "SKIPPED"}),
                           ("confidence", {"high", "reduced"}),
-                          ("note", {"public_endpoint", "soft_deny"})):
+                          ("note", {"public_endpoint", "soft_deny", "caller_scoped", "shared_data", "control_unusable"})):
         if result.get(name) in allowed:
             properties[name] = result[name]
+    if isinstance(result.get("spec_drift"), str) and result["spec_drift"]:
+        properties["spec_drift"] = result["spec_drift"]
     raw = result.get("evidence")
     if not isinstance(raw, dict):
         return properties
@@ -23,9 +25,11 @@ def result_properties(result):
     for key in ("overlap_count", "confirm_runs", "pages_walked"):
         if type(raw.get(key)) is int and raw[key] >= 0:
             evidence[key] = raw[key]
-    for key in ("canary_matched", "nonexistent_skipped"):
+    for key in ("canary_matched", "nonexistent_skipped", "control_unusable"):
         if type(raw.get(key)) is bool:
             evidence[key] = raw[key]
+    if raw.get("scope") in {"object", "caller", "shared"}:
+        evidence["scope"] = raw["scope"]
     controls = raw.get("control_statuses", {})
     if isinstance(controls, dict):
         evidence["control_statuses"] = {key: value for key, value in controls.items()

@@ -18,7 +18,14 @@ def write_sarif(results, path, *, source_uri=None) -> Path:
     Without it, locations describe only the logical API endpoints.
     """
     rules, indexes, findings, notifications = [], {}, [], []
+    execution_failed = False
     for result in results:
+        if result.get("spec_drift"):
+            notifications.append({
+                "level": "warning",
+                "message": {"text": f"spec_drift: {result['spec_drift']} is absent from the spec"},
+                "properties": {"spec_drift": result["spec_drift"]},
+            })
         if result["status"] == "inconclusive":
             identity = json.dumps([result["rule_id"], result["method"], result["path"]], ensure_ascii=True)
             inconclusive_location: dict[str, object] = {"logicalLocations": [{
@@ -52,6 +59,7 @@ def write_sarif(results, path, *, source_uri=None) -> Path:
             })
         reference = {"id": rule_id, "index": indexes[rule_id]}
         if result["status"] == "error":
+            execution_failed = True
             notification = {
                 "associatedRule": reference,
                 "level": "error",
@@ -86,7 +94,7 @@ def write_sarif(results, path, *, source_uri=None) -> Path:
         "runs": [{
             "tool": {"driver": {"name": "LedgerProbe", "rules": rules}},
             "invocations": [{
-                "executionSuccessful": not notifications,
+                "executionSuccessful": not execution_failed,
                 "toolExecutionNotifications": notifications,
             }],
             "results": findings,

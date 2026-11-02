@@ -1,0 +1,24 @@
+id: authz-missing-spec-endpoint
+name: Endpoint absent from the fixture spec
+severity: LOW
+owasp_category: API1:2023
+cvss_score: 2.0
+target_endpoints:
+  - path: /api/v1/not-in-spec/{id}
+    method: GET
+auth_contexts:
+  primary: owner
+  forbidden: other
+parameters:
+  path:
+    id: "{{id}}"
+acceptable_status: [401, 403, 404]
+leak_detection:
+  canaries: ["{{canary_value}}"]
+  min_unique_leaf_values: 2
+  ignore_fields: []
+controls:
+  nonexistent_object: true
+  unauthenticated: true
+confirm: 2
+require_primary_canary: true

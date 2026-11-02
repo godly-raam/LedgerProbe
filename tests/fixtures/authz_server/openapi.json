@@ -68,6 +68,26 @@
         }
       }
     },
+    "/api/v1/profile": {
+      "get": {
+        "operationId": "getProfile",
+        "summary": "Caller-scoped profile",
+        "responses": {
+          "200": {"description": "Caller profile"},
+          "401": {"description": "Unauthorized"}
+        }
+      }
+    },
+    "/api/v1/shared": {
+      "get": {
+        "operationId": "getShared",
+        "summary": "Shared catalogue",
+        "responses": {
+          "200": {"description": "Shared catalogue"},
+          "401": {"description": "Unauthorized"}
+        }
+      }
+    },
     "/api/v1/paginated/{id}": {
       "get": {
         "operationId": "getPaginated",

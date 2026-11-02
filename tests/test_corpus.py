@@ -36,8 +36,8 @@ async def execute_profile(profile_name: str, tmp_path: Path) -> tuple[int, dict,
         kwargs["transport"] = transport
         return GuardedClient(**kwargs)
 
-    cli_timeout = 0.05 if profile_name == "slow_timeout" else 5.0
-    args = ledgerprobe.arguments([
+    cli_timeout = 0.05 if profile_name in {"slow_timeout", "control_timeout"} else 5.0
+    cli_args = [
         "--spec", str(SPEC_PATH),
         "--base-url", "http://authz.test",
         "--rules", str(rule_file),
@@ -46,7 +46,10 @@ async def execute_profile(profile_name: str, tmp_path: Path) -> tuple[int, dict,
         "--read-only",
         "--sarif", str(sarif_path),
         "--junit", str(junit_path),
-    ])
+    ]
+    if profile_spec.get("spec_check"):
+        cli_args.extend(["--spec-check", profile_spec["spec_check"]])
+    args = ledgerprobe.arguments(cli_args)
 
     observed = []
     original_run_rules = ledgerprobe.run_rules
@@ -95,6 +98,8 @@ def test_corpus_profile(profile_name: str, profile_spec: dict, tmp_path: Path):
         assert exit_code == 0, f"Profile {profile_name} expected exit code 0 on PASS, got {exit_code}"
     elif expected_verdict == "INCONCLUSIVE":
         assert exit_code == 0, f"Profile {profile_name} expected exit code 0 on default INCONCLUSIVE, got {exit_code}"
+    elif expected_verdict == "SKIPPED":
+        assert exit_code == 2, f"Profile {profile_name} expected exit code 2 on SKIPPED, got {exit_code}"
 
     # Ensure sensitive canaries and context credentials are never leaked into reports
     sarif_content = sarif_path.read_text(encoding="utf-8")
@@ -102,6 +107,12 @@ def test_corpus_profile(profile_name: str, profile_spec: dict, tmp_path: Path):
     for secret in ("canary-secret-owner-9988", "token-owner", "token-other"):
         assert secret not in sarif_content, f"Sensitive secret '{secret}' leaked in SARIF for {profile_name}"
         assert secret not in junit_content, f"Sensitive secret '{secret}' leaked in JUnit for {profile_name}"
+
+    if "expected_spec_drift" in profile_spec:
+        drift = profile_spec["expected_spec_drift"]
+        assert result.get("spec_drift") == drift
+        assert drift in sarif_content
+        assert drift in junit_content
 
 
 def test_fixed_list_has_owner_positive_baseline():
