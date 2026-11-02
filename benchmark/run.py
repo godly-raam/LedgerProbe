@@ -11,10 +11,12 @@ import argparse
 import ipaddress
 import json
 import os
+import re
 import subprocess
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
 from collections import Counter
@@ -38,6 +40,8 @@ DOCKER_NETWORKS = (
     ipaddress.ip_network("172.16.0.0/12"),
     ipaddress.ip_network("192.168.0.0/16"),
 )
+MODES = ("legacy_strict", "legacy_lenient", "differential")
+COUNT_KEYS = ("TP", "FP", "TN", "FN", "INC_VULN", "INC_SAFE")
 
 
 class UnsafeTarget(ValueError):
@@ -50,12 +54,7 @@ class Blocked(RuntimeError):
 
 def validate_target_url(url: str, *, allow_docker_internal: bool = False,
                         docker_hosts: Iterable[str] = ()) -> str:
-    """Return *url* if it is loopback (or an explicitly allowed Docker host).
-
-    Raises UnsafeTarget for public hosts, link-local/metadata addresses,
-    credential-bearing URLs, non-HTTP schemes and malformed ports. This is the
-    only place the benchmark decides that a network destination is in scope.
-    """
+    """Return *url* if it is loopback (or an explicitly allowed Docker host)."""
     if not isinstance(url, str) or not url.strip():
         raise UnsafeTarget("target URL is empty")
     parsed = urlsplit(url.strip())
@@ -246,13 +245,92 @@ def _junit_results(path: Path) -> dict[str, dict[str, str | None]]:
     return results
 
 
+def _substitute(value: Any, variables: dict[str, Any]) -> Any:
+    if isinstance(value, str):
+        def repl(match: re.Match[str]) -> str:
+            key = match.group(1)
+            if key not in variables:
+                raise KeyError(key)
+            return str(variables[key])
+        return re.sub(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}", repl, value)
+    if isinstance(value, list):
+        return [_substitute(item, variables) for item in value]
+    if isinstance(value, dict):
+        return {key: _substitute(item, variables) for key, item in value.items()}
+    return value
+
+
+def _lenient_request(base: str, rule: dict[str, Any], inputs: dict[str, Any]) -> dict[str, str]:
+    """Execute one status-only rule, treating 401/403/404 as a pass.
+
+    The engine's legacy assertion schema cannot express a status set without
+    changing the engine, which is out of scope for this benchmark task.
+    """
+    variables = inputs.get("variables", {})
+    contexts = inputs.get("contexts", {})
+    target = (rule.get("target_endpoints") or [{}])[0]
+    path = target.get("path", "")
+    method = target.get("method", "GET")
+    params = rule.get("parameters") or {}
+    try:
+        for name, value in (params.get("path") or {}).items():
+            path = path.replace("{" + name + "}", urllib.parse.quote(str(_substitute(value, variables)), safe=""))
+        path = _substitute(path, variables)
+        query = {key: _substitute(value, variables) for key, value in (params.get("query") or {}).items()}
+    except KeyError as exc:
+        return {"verdict": "INCONCLUSIVE", "reason": f"unresolved_parameter:{exc.args[0]}", "name": rule.get("name", "")}
+    if "{{" in path or "{" in path and not query:
+        # A remaining path template is not a usable request.
+        if re.search(r"\{[A-Za-z_][A-Za-z0-9_]*\}", path):
+            return {"verdict": "INCONCLUSIVE", "reason": "unresolved_path", "name": rule.get("name", "")}
+    url = base.rstrip("/") + path
+    if query:
+        url += "?" + urllib.parse.urlencode(query)
+    headers = {"Accept": "application/json"}
+    context_name = (rule.get("auth_contexts") or {}).get("forbidden")
+    headers.update(contexts.get(context_name, {}) if context_name else {})
+    body = None
+    if "body" in rule:
+        try:
+            body = json.dumps(_substitute(rule["body"], variables)).encode("utf-8")
+        except KeyError as exc:
+            return {"verdict": "INCONCLUSIVE", "reason": f"unresolved_parameter:{exc.args[0]}", "name": rule.get("name", "")}
+        headers["Content-Type"] = "application/json"
+    request = urllib.request.Request(url, data=body, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            status = response.status
+    except urllib.error.HTTPError as exc:
+        status = exc.code
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        return {"verdict": "INCONCLUSIVE", "reason": f"request_error:{type(exc).__name__}", "name": rule.get("name", "")}
+    if status in {401, 403, 404}:
+        verdict, reason = "PASS", f"status_{status}"
+    elif 200 <= status < 300:
+        verdict, reason = "FAIL", f"status_{status}"
+    else:
+        verdict, reason = "INCONCLUSIVE", f"status_{status}"
+    return {"verdict": verdict, "reason": reason, "name": rule.get("name", "")}
+
+
+def _lenient_scan(base: str, target: Target, inputs: dict[str, Any]) -> dict[str, dict[str, str | None]]:
+    document = yaml.safe_load(target.rules_legacy.read_text(encoding="utf-8"))
+    results: dict[str, dict[str, str | None]] = {}
+    for rule in document.get("rules", []):
+        results[rule["id"]] = _lenient_request(base, rule, inputs)
+    return results
+
+
 def run_scan(target: Target, instance: str, mode: str, base_url: str,
-             inputs: Path, out: Path) -> dict[str, dict[str, str | None]]:
-    sandbox = out / target.name / instance / mode
+             inputs: Path, out: Path, repeat: int = 1) -> dict[str, dict[str, str | None]]:
+    sandbox = out / target.name / instance / mode / f"run-{repeat}"
     sandbox.mkdir(parents=True, exist_ok=True)
     sarif = sandbox / "results.sarif"
     junit = sandbox / "results.xml"
-    rules = target.rules_legacy if mode == "legacy" else target.rules_differential
+    if mode == "legacy_lenient":
+        data = json.loads(inputs.read_text(encoding="utf-8"))
+        return _lenient_scan(base_url, target, data)
+    rules = target.rules_legacy if mode == "legacy_strict" else target.rules_differential
     command = [
         sys.executable, str(ROOT / "ledgerprobe.py"),
         "--spec", str(target.spec), "--base-url", base_url,
@@ -262,10 +340,9 @@ def run_scan(target: Target, instance: str, mode: str, base_url: str,
     ]
     if target.read_only:
         command.append("--read-only")
-    print(f"[*] {target.name}/{instance}/{mode}: {' '.join(command[1:5])} ...")
+    print(f"[*] {target.name}/{instance}/{mode}/run-{repeat}: {' '.join(command[1:5])} ...")
     completed = _run(command, timeout=300, check=False, allow_findings=True)
     if completed.returncode not in {0, 1}:
-        # JUnit may still contain per-endpoint execution errors; keep them.
         print(f"[!] scan exited {completed.returncode}: "
               f"{(completed.stderr or completed.stdout or '').strip()[-1000:]}", file=sys.stderr)
     return _junit_results(junit)
@@ -273,46 +350,72 @@ def run_scan(target: Target, instance: str, mode: str, base_url: str,
 
 def _score(cases: list[dict[str, Any]], results: dict[str, dict[str, str | None]],
            instance: str) -> dict[str, Any]:
-    counts = Counter()
+    counts = Counter({key: 0 for key in COUNT_KEYS})
     rows = []
-    for case in cases:
-        if case["instance"] != instance:
-            continue
+    selected = [case for case in cases if case["instance"] == instance]
+    for case in selected:
         observed = results.get(case["rule_id"], {})
         verdict = observed.get("verdict") or "MISSING"
         reason = observed.get("reason") or ""
         if case["label"] == "vulnerable":
-            outcome = "TP" if verdict == "FAIL" else "FN"
+            if verdict == "FAIL":
+                outcome = "TP"
+            elif verdict == "PASS":
+                outcome = "FN"
+            else:
+                outcome = "INC_VULN"
         else:
-            outcome = "FP" if verdict == "FAIL" else "TN" if verdict == "PASS" else "INCONCLUSIVE"
-        if outcome == "INCONCLUSIVE":
-            counts["INCONCLUSIVE"] += 1
-        else:
-            if outcome == "FN" and verdict != "PASS":
-                counts["INCONCLUSIVE"] += 1
-            counts[outcome] += 1
+            if verdict == "FAIL":
+                outcome = "FP"
+            elif verdict == "PASS":
+                outcome = "TN"
+            else:
+                outcome = "INC_SAFE"
+        counts[outcome] += 1
         rows.append({
             "rule_id": case["rule_id"], "method": case["method"], "path": case["path"],
             "label": case["label"], "verdict": verdict, "reason": reason,
-            "outcome": outcome, "source": case["source"],
+            "outcome": outcome, "source": case["source"], "instance": instance,
         })
+    if sum(counts.values()) != len(selected):
+        raise AssertionError(f"{instance}: counts {dict(counts)} do not sum to {len(selected)} cases")
     tp, fp, tn, fn = counts["TP"], counts["FP"], counts["TN"], counts["FN"]
-    precision = tp / (tp + fp) if tp + fp else None
-    recall = tp / (tp + fn) if tp + fn else None
-    return {"counts": {"TP": tp, "FP": fp, "TN": tn, "FN": fn,
-                       "INCONCLUSIVE": counts["INCONCLUSIVE"]},
-            "precision": precision, "recall": recall, "rows": rows}
+    inc_v, inc_s = counts["INC_VULN"], counts["INC_SAFE"]
+    return {
+        "counts": dict(counts),
+        "cases": len(selected),
+        "precision": tp / (tp + fp) if tp + fp else None,
+        "recall": tp / (tp + fn + inc_v) if tp + fn + inc_v else None,
+        "recall_excl_inconclusive": tp / (tp + fn) if tp + fn else None,
+        "rows": rows,
+    }
 
 
 def _fmt(value: float | None) -> str:
     return "n/a" if value is None else f"{value * 100:.1f}%"
 
 
-def _table_row(name: str, mode: str, summary: dict[str, Any], status: str = "ok") -> str:
+def _table_row(name: str, mode: str, summary: dict[str, Any], cases: int,
+               status: str = "ok") -> str:
     c = summary["counts"]
-    return (f"| {name} | {mode} | {status} | {c['TP']} | {c['FP']} | {c['TN']} | "
-            f"{c['FN']} | {c['INCONCLUSIVE']} | {_fmt(summary['precision'])} | "
-            f"{_fmt(summary['recall'])} |")
+    return (f"| {name} | {mode} | {status} | {cases} | {c['TP']} | {c['FP']} | {c['TN']} | "
+            f"{c['FN']} | {c['INC_VULN']} | {c['INC_SAFE']} | {_fmt(summary['precision'])} | "
+            f"{_fmt(summary['recall'])} | {_fmt(summary['recall_excl_inconclusive'])} |")
+
+
+def _diagnosis(row: dict[str, Any]) -> str:
+    reason = row["reason"] or "none"
+    if row["outcome"] == "FP":
+        return (f"Safe endpoint returned FAIL (`{reason}`); the "
+                f"{'strict' if 'assertion_failed' in reason else 'status'} baseline treats this "
+                "non-leaking response as a finding.")
+    if row["outcome"] == "FN":
+        return (f"Vulnerable endpoint returned PASS (`{reason}`); the request was incorrectly "
+                "treated as denied.")
+    if row["outcome"] == "INC_VULN":
+        return (f"Vulnerable endpoint was {row['verdict']} (`{reason}`); counted as a miss, "
+                "not a true negative.")
+    return (f"Safe endpoint was {row['verdict']} (`{reason}`); not counted as a true negative.")
 
 
 def write_results(document: dict[str, Any], path: Path) -> None:
@@ -322,24 +425,46 @@ def write_results(document: dict[str, Any], path: Path) -> None:
         f"Generated: {datetime.now(timezone.utc).isoformat(timespec='seconds')}",
         "",
         "Targets were run locally on loopback only. Labels come from "
-        "`benchmark/ground_truth/`, frozen before any scan.",
+        "`benchmark/ground_truth/`, frozen before any scan. Each mode was run "
+        "three times with a fresh target reset between runs.",
         "",
         "## Scores",
         "",
-        "| Target | Mode | Status | TP | FP | TN | FN | INCONCLUSIVE | Precision | Recall |",
-        "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+        "| Target | Mode | Status | N | TP | FP | TN | FN | INC_vuln | INC_safe | Precision | Recall | Recall excl. INC |",
+        "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
     for target_name, target_result in document["targets"].items():
         if target_result["status"] != "ok":
-            lines.append(f"| {target_name} | — | {target_result['status']} | 0 | 0 | 0 | 0 | 0 | n/a | n/a |")
+            lines.append(f"| {target_name} | — | {target_result['status']} | — | — | — | — | — | — | — | n/a | n/a | n/a |")
             continue
+        n = len(document.get("targets", {}).get(target_name, {}).get("ground_truth", {}).get("cases", []))
+        if not n:
+            n = sum(summary["cases"] for summary in target_result["modes"].values())
         for mode, summary in target_result["modes"].items():
-            lines.append(_table_row(target_name, mode, summary))
+            lines.append(_table_row(target_name, mode, summary, summary["cases"]))
     lines += [
         "",
-        "INCONCLUSIVE is reported separately and is never counted as correct. "
-        "A vulnerable endpoint that is not FAIL is counted as FN; a safe endpoint "
-        "that is neither PASS nor FAIL is INCONCLUSIVE and is not counted as TN.",
+        "`Recall` counts `INC_vuln` as a miss: `TP / (TP + FN + INC_vuln)`. "
+        "`Recall excl. INC` is `TP / (TP + FN)`. Every row's six outcome counts "
+        "must sum to N; a runtime assertion enforces this. `INCONCLUSIVE` is "
+        "never counted as correct.",
+        "",
+        "## Determinism",
+        "",
+        "| Target | Mode | Runs | Identical verdicts | Flips |",
+        "| --- | --- | ---: | --- | --- |",
+    ]
+    for target_name, target_result in document["targets"].items():
+        if target_result["status"] != "ok":
+            continue
+        for mode, det in target_result.get("determinism", {}).items():
+            flips = "; ".join(
+                f"`{item['instance']}/{item['case']}`: " + ", ".join(str(v) for v in item["verdicts"])
+                for item in det.get("flips", [])
+            ) or "none"
+            lines.append(f"| {target_name} | {mode} | {det.get('runs', 0)} | "
+                         f"{'yes' if det.get('identical') else 'no'} | {flips} |")
+    lines += [
         "",
         "## Detail",
         "",
@@ -362,69 +487,89 @@ def write_results(document: dict[str, Any], path: Path) -> None:
                     f"{row['verdict']} | {row['reason'] or '—'} | {row['outcome']} | {row['source']} |"
                 )
             lines.append("")
-        lines.append("#### FP/FN list")
+        lines.append("#### FP, FN and INCONCLUSIVE diagnoses")
         lines.append("")
-        failures = [(mode, row) for mode, summary in target_result["modes"].items()
-                    for row in summary["rows"] if row["outcome"] in {"FP", "FN"}]
-        if not failures:
+        rows = [(mode, row) for mode, summary in target_result["modes"].items()
+                for row in summary["rows"] if row["outcome"] not in {"TP", "TN"}]
+        if not rows:
             lines.append("None.")
-        for mode, row in failures:
+        for mode, row in rows:
             lines.append(
                 f"- **{row['outcome']}** ({mode}) `{row['rule_id']}` {row['method']} "
-                f"`{row['path']}` — verdict `{row['verdict']}`, reason "
-                f"`{row['reason'] or 'none'}`. {row['label']} label; source: {row['source']}."
+                f"`{row['path']}` — {row['verdict']}, reason `{row['reason'] or 'none'}`. "
+                f"{_diagnosis(row)} Source: {row['source']}."
             )
         lines.append("")
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def _scan_mode(target: Target, mode: str, out: Path, base_urls: dict[str, str],
+               cases: list[dict[str, Any]], repeat: int) -> dict[str, Any]:
+    combined = {"counts": Counter({key: 0 for key in COUNT_KEYS}), "rows": []}
+    for instance, default_url in target.instances.items():
+        base = base_urls.get(instance) or default_url
+        validate_target_url(base, allow_docker_internal=False, docker_hosts=target.docker_hosts)
+        inputs = out / target.name / instance / "inputs.json"
+        inputs.unlink(missing_ok=True)
+        setup_command = [
+            sys.executable, str(target.setup),
+            "--base-url", base, "--instance", instance, "--out", str(inputs),
+        ]
+        _run(setup_command, timeout=240)
+        results = run_scan(target, instance, mode, base, inputs, out, repeat)
+        summary = _score(cases, results, instance)
+        for key in COUNT_KEYS:
+            combined["counts"][key] += summary["counts"][key]
+        combined["rows"].extend(summary["rows"])
+    if sum(combined["counts"].values()) != len(cases):
+        raise AssertionError(f"{target.name}/{mode}: {dict(combined['counts'])} != {len(cases)} cases")
+    tp, fp, tn, fn = (combined["counts"][key] for key in ("TP", "FP", "TN", "FN"))
+    inc_v = combined["counts"]["INC_VULN"]
+    combined.update({
+        "cases": len(cases),
+        "precision": tp / (tp + fp) if tp + fp else None,
+        "recall": tp / (tp + fn + inc_v) if tp + fn + inc_v else None,
+        "recall_excl_inconclusive": tp / (tp + fn) if tp + fn else None,
+    })
+    return combined
+
+
 def run_target(target: Target, out: Path, *, no_docker: bool, keep: bool,
-               base_urls: dict[str, str]) -> dict[str, Any]:
+               base_urls: dict[str, str], repeats: int = 3) -> dict[str, Any]:
     document, cases = _load_cases(target.ground_truth)
-    started = False
     try:
-        if no_docker:
-            missing = [name for name in target.instances if not base_urls.get(name)]
-            if missing:
-                raise Blocked(f"no base URL supplied for {', '.join(missing)}")
-        else:
-            compose_up(target, out)
-            started = True
         modes: dict[str, Any] = {}
-        all_rows: list[dict[str, Any]] = []
-        for mode in ("legacy", "differential"):
-            combined = {"counts": Counter({key: 0 for key in
-                                            ("TP", "FP", "TN", "FN", "INCONCLUSIVE")}),
-                        "rows": []}
-            for instance, default_url in target.instances.items():
-                base = base_urls.get(instance) or default_url
-                validate_target_url(base, allow_docker_internal=False,
-                                    docker_hosts=target.docker_hosts)
-                inputs = out / target.name / instance / "inputs.json"
-                if not inputs.exists():
-                    setup_command = [
-                        sys.executable, str(target.setup),
-                        "--base-url", base, "--instance", instance,
-                        "--out", str(inputs),
-                    ]
-                    _run(setup_command, timeout=180)
-                results = run_scan(target, instance, mode, base, inputs, out)
-                summary = _score(cases, results, instance)
-                for key in ("TP", "FP", "TN", "FN", "INCONCLUSIVE"):
-                    combined["counts"][key] += summary["counts"][key]
-                combined["rows"].extend({**row, "instance": instance} for row in summary["rows"])
-            tp, fp, tn, fn = (combined["counts"][key] for key in ("TP", "FP", "TN", "FN"))
-            modes[mode] = {
-                "counts": dict(combined["counts"]),
-                "precision": tp / (tp + fp) if tp + fp else None,
-                "recall": tp / (tp + fn) if tp + fn else None,
-                "rows": combined["rows"],
-            }
-        return {"status": "ok", "modes": modes, "ground_truth": document}
+        determinism: dict[str, Any] = {}
+        for mode in MODES:
+            run_summaries = []
+            run_maps = []
+            for repeat in range(1, repeats + 1):
+                if not no_docker:
+                    compose_down(target)
+                    compose_up(target, out)
+                elif repeats > 1 and target.name == "crapi":
+                    raise Blocked("repeated crAPI runs require Docker reset")
+                summary = _scan_mode(target, mode, out, base_urls, cases, repeat)
+                run_summaries.append(summary)
+                run_maps.append({(row["instance"], row["rule_id"]): row["verdict"]
+                                 for row in summary["rows"]})
+                if not no_docker and not keep:
+                    compose_down(target)
+            first = run_summaries[0]
+            flips = []
+            keys = set().union(*run_maps)
+            for key in sorted(keys):
+                values = [mapping.get(key, "MISSING") for mapping in run_maps]
+                if len(set(values)) > 1:
+                    flips.append({"instance": key[0], "case": key[1], "verdicts": values})
+            modes[mode] = first
+            determinism[mode] = {"runs": repeats, "identical": not flips, "flips": flips}
+        return {"status": "ok", "modes": modes, "determinism": determinism,
+                "ground_truth": document}
     except Blocked as exc:
         return {"status": "blocked", "reason": str(exc), "ground_truth": document}
     finally:
-        if started and not keep:
+        if not no_docker and not keep:
             compose_down(target)
 
 
@@ -437,10 +582,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--keep", action="store_true", help="leave compose services running")
     parser.add_argument("--merge", action="store_true",
                         help="update selected targets in an existing results.json")
+    parser.add_argument("--repeats", type=int, default=1,
+                        help="runs per mode, each preceded by a fresh target reset")
     parser.add_argument("--base-url-vulnerable", help="override VAmPI vulnerable instance URL")
     parser.add_argument("--base-url-secure", help="override VAmPI secure instance URL")
     parser.add_argument("--base-url-default", help="override the single-instance target URL")
     args = parser.parse_args(argv)
+    if args.repeats < 1:
+        parser.error("--repeats must be >= 1")
 
     out = args.out.resolve()
     out.mkdir(parents=True, exist_ok=True)
@@ -460,18 +609,17 @@ def main(argv: list[str] | None = None) -> int:
     for name in selected:
         target = TARGETS[name]
         base_urls = {instance: overrides.get(instance) or "" for instance in target.instances}
-        if not args.no_docker:
-            if not docker_available():
-                document["targets"][name] = {
-                    "status": "blocked",
-                    "reason": "Docker daemon is not reachable by this user; no containers were started.",
-                }
-                print(f"[!] {name}: blocked (Docker daemon unavailable)", file=sys.stderr)
-                exit_code = 2
-                continue
-        print(f"[*] target {name}: {', '.join(target.instances)}")
+        if not args.no_docker and not docker_available():
+            document["targets"][name] = {
+                "status": "blocked",
+                "reason": "Docker daemon is not reachable by this user; no containers were started.",
+            }
+            print(f"[!] {name}: blocked (Docker daemon unavailable)", file=sys.stderr)
+            exit_code = 2
+            continue
+        print(f"[*] target {name}: {', '.join(target.instances)}; {args.repeats} run(s)/mode")
         result = run_target(target, out, no_docker=args.no_docker, keep=args.keep,
-                            base_urls=base_urls)
+                            base_urls=base_urls, repeats=args.repeats)
         document["targets"][name] = result
         if result["status"] != "ok":
             print(f"[!] {name}: {result['reason']}", file=sys.stderr)

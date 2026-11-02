@@ -54,6 +54,8 @@ def test_scorer_never_counts_inconclusive_as_correct():
          "label": "vulnerable", "source": "s"},
         {"rule_id": "v2", "instance": "i", "method": "GET", "path": "/v2",
          "label": "vulnerable", "source": "s"},
+        {"rule_id": "v3", "instance": "i", "method": "GET", "path": "/v3",
+         "label": "vulnerable", "source": "s"},
         {"rule_id": "s1", "instance": "i", "method": "GET", "path": "/s1",
          "label": "safe", "source": "s"},
         {"rule_id": "s2", "instance": "i", "method": "GET", "path": "/s2",
@@ -61,11 +63,15 @@ def test_scorer_never_counts_inconclusive_as_correct():
     ]
     results = {
         "v1": {"verdict": "FAIL", "reason": "leak_detected"},
-        "v2": {"verdict": "INCONCLUSIVE", "reason": "ambiguous_2xx"},
+        "v2": {"verdict": "PASS", "reason": "denied"},
+        "v3": {"verdict": "INCONCLUSIVE", "reason": "ambiguous_2xx"},
         "s1": {"verdict": "PASS", "reason": ""},
         "s2": {"verdict": "INCONCLUSIVE", "reason": "ambiguous_2xx"},
     }
     summary = _score(cases, results, "i")
-    assert summary["counts"] == {"TP": 1, "FP": 0, "TN": 1, "FN": 1, "INCONCLUSIVE": 2}
+    assert summary["counts"] == {"TP": 1, "FP": 0, "TN": 1, "FN": 1,
+                                 "INC_VULN": 1, "INC_SAFE": 1}
+    assert sum(summary["counts"].values()) == len(cases)
     assert summary["precision"] == 1.0
-    assert summary["recall"] == 0.5
+    assert summary["recall"] == pytest.approx(1 / 3)
+    assert summary["recall_excl_inconclusive"] == 0.5
