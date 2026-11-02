@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import quopri
 import re
 import secrets
 import time
@@ -74,20 +75,26 @@ def find_key(value, key):
     return None
 
 
-def mailhog_otp(mailhog: str, email: str) -> str:
+def mailhog_vehicle(mailhog: str, email: str) -> tuple[str, str]:
+    """Return the VIN and pincode from the signup welcome email."""
     for _ in range(30):
         status, body = call(mailhog, "GET", "/api/v2/messages")
         if status == 200:
             for item in (body or {}).get("items", []):
                 recipients = item.get("To") or []
-                if not any(email.lower() in json.dumps(r).lower() for r in recipients):
+                addresses = {f"{r.get('Mailbox', '')}@{r.get('Domain', '')}".lower()
+                             for r in recipients}
+                if email.lower() not in addresses:
                     continue
-                text = json.dumps(item.get("Content", {}))
-                match = OTP_RE.search(text.replace("\\n", " "))
-                if match:
-                    return match.group(1)
+                raw = (item.get("Content") or {}).get("Body", "")
+                text = quopri.decodestring(raw.encode("utf-8", "replace")).decode(
+                    "utf-8", "replace").replace("=\r\n", "")
+                vin = re.search(r"VIN:.*?>([A-Z0-9]{10,17})</font>", text, re.S)
+                pin = re.search(r"Pincode:.*?>(\d{4,6})</font>", text, re.S)
+                if vin and pin:
+                    return vin.group(1), pin.group(1)
         time.sleep(1)
-    raise SystemExit(f"no OTP for {email} in mailhog")
+    raise SystemExit(f"no vehicle email for {email} in mailhog")
 
 
 def signup_and_login(base: str, mailhog: str, email: str, name: str, password: str) -> str:
@@ -100,12 +107,7 @@ def signup_and_login(base: str, mailhog: str, email: str, name: str, password: s
                                {"email": email, "password": password})
         if status_login != 200:
             raise SystemExit(f"signup failed for {email}: {status} {response}")
-    else:
-        otp = mailhog_otp(mailhog, email)
-        status, response = call(base, "POST", "/identity/api/auth/v3/check-otp",
-                                {"email": email, "otp": otp, "password": password})
-        if status not in (200, 201):
-            raise SystemExit(f"OTP verification failed for {email}: {status} {response}")
+    # 1.1.6 sends vehicle details, not an OTP, on signup; login is immediate.
     status, response = call(base, "POST", "/identity/api/auth/login",
                             {"email": email, "password": password})
     token = find_key(response, "token") if isinstance(response, dict) else None
@@ -114,12 +116,13 @@ def signup_and_login(base: str, mailhog: str, email: str, name: str, password: s
     return token
 
 
-def owner_vehicle(base: str, token: str, vin: str) -> tuple[str, str]:
+def owner_vehicle(base: str, token: str, mailhog: str, email: str) -> tuple[str, str]:
     status, response = call(base, "GET", "/identity/api/v2/vehicle/vehicles", token=token)
     if status == 200 and isinstance(response, list) and response:
         return str(response[0].get("uuid")), str(response[0].get("vin"))
+    vin, pincode = mailhog_vehicle(mailhog, email)
     status, response = call(base, "POST", "/identity/api/v2/vehicle/add_vehicle",
-                            {"vin": vin, "pincode": "1234"}, token)
+                            {"vin": vin, "pincode": pincode}, token)
     if status not in (200, 201):
         raise SystemExit(f"vehicle seed failed: {status} {response}")
     status, response = call(base, "GET", "/identity/api/v2/vehicle/vehicles", token=token)
@@ -147,8 +150,7 @@ def main() -> int:
     other_token = signup_and_login(base, args.mailhog_url, other_email,
                                    f"LP Other {suffix}", password)
 
-    vin = ("LP" + suffix.upper() + secrets.token_hex(6).upper())[:17].ljust(17, "0")
-    owner_vehicle_id, owner_vin = owner_vehicle(base, owner_token, vin)
+    owner_vehicle_id, owner_vin = owner_vehicle(base, owner_token, args.mailhog_url, owner_email)
 
     status, products = call(base, "GET", "/workshop/api/shop/products", token=owner_token)
     product_id = find_key(products, "id") if status == 200 else None

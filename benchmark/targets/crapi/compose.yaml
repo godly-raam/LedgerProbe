@@ -19,6 +19,14 @@ services:
       MAILHOG_HOST: mailhog
       MAILHOG_PORT: "1025"
       MAILHOG_DOMAIN: example.com
+      SMTP_HOST: smtp.example.com
+      SMTP_PORT: "587"
+      SMTP_EMAIL: user@example.com
+      SMTP_PASS: xxxxxxxxxxxxxx
+      SMTP_FROM: no-reply@example.com
+      SMTP_AUTH: "true"
+      SMTP_STARTTLS: "true"
+      API_GATEWAY_URL: https://api.mypremiumdealership.com
       JWT_EXPIRATION: "604800000"
       TLS_ENABLED: "false"
       ENABLE_SHELL_INJECTION: "false"
@@ -116,6 +124,8 @@ services:
       COMMUNITY_SERVICE: crapi-community:8087
       IDENTITY_SERVICE: crapi-identity:8080
       WORKSHOP_SERVICE: crapi-workshop:8000
+      # The chatbot is intentionally omitted; nginx still needs a nonempty upstream.
+      CHATBOT_SERVICE: crapi-identity:8080
       MAILHOG_WEB_SERVICE: mailhog:8025
       TLS_ENABLED: "false"
     depends_on:
