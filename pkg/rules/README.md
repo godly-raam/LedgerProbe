@@ -218,6 +218,9 @@ confirm: 2
 | `confirm` | Optional integer in `[0, 100]` (booleans rejected). Default: `2`. | Additional identical requests with the leaking identity (forbidden or unauthenticated) for a would-be FAIL only. Every repeat must reproduce stable owner-specific evidence. `0` disables repeats; the upper bound prevents accidental unbounded traffic. PASS and ambiguous outcomes are not repeated. |
 | `pagination` | Optional `{param: string, max_pages: 1..100}`. | Sets integer query values `1..max_pages`; every page uses the guarded client and is independently evaluated. Any FAIL takes priority, then ERROR. Ambiguous pages without an owner canary do not block PASS after an owner-canary-positive page has been tested successfully; other inconclusives remain. Without such a page, ambiguity stays INCONCLUSIVE. This is bounded page-number traversal, not cursor/link discovery. |
 | `require_primary_canary` | Optional boolean, default `false`. | Requires the initial primary response to contain a configured canary; otherwise ERROR `baseline_missing_canary`. Use for list/profile checks that must prove the owner sees a non-empty owned result. |
+| `scope` | Optional `object`, `caller`, or `shared`; default `object`. | Selects the evidence model. `object` is the existing object-isolation contract. `caller` means the endpoint returns data selected by the requesting identity. `shared` means a catalogue/feed intentionally common to authenticated identities. |
+| `require_owner_canary_in_baseline` | Optional boolean, default `false`; required `true` for `scope: caller`. | Prevents a caller-scoped PASS from being vacuous: the owner baseline must actually contain one of the declared canaries. A caller rule must also declare at least one canary. |
+| `spec_check` | Optional `strict` or `warn`; CLI default is `strict`. | Per-rule override of `--spec-check`. `strict` skips an endpoint absent from the loaded spec; `warn` executes a synthetic endpoint record and attaches `spec_drift` to the result/report. |
 
 The runner resolves canaries before any selected-target HTTP. Both named
 `primary` and `forbidden` contexts are required and must have different names.
@@ -255,6 +258,42 @@ path/query/body inputs; neither forbidden nor control responses update state.
 | `nonexistent_object` | Replays the forbidden identity with a generated candidate ID. Supports one unambiguous path/query `id` or `*_id` parameter (otherwise a single path parameter), schema-declared UUID/string/integer types, bounds, and supported string patterns. Multiple IDs, unknown/unsupported types, enums, or unsatisfied constraints skip the control and reduce confidence. UUIDs/integers are randomized; string candidates preserve existing length/separators or known prefixes and are checked against the pattern. Candidates cannot be proven absent; only values from a valid control are treated as shared. Owner-like 2xx controls produce `invalid_control` as described above. Non-JSON control bodies are not usable subtraction evidence. |
 | `unauthenticated` | Replays the original request with no context headers, `auth=None`, and an empty Cookie header to prevent cookie-jar reuse. A 2xx containing an owner canary, or sufficient baseline overlap with a valid nonexistent control, is FAIL `unauthenticated_leak` even if the authenticated forbidden request was denied. `public_endpoint` PASS requires identical unauthenticated/forbidden data **and no owner-specific evidence**. |
 
+### Control precedence
+
+A nonexistent-object control that returns `5xx`, `429`, or times out is
+**unusable**, not a verdict-level server error. With an unusable control:
+
+- a reproducible explicit owner canary in the forbidden `2xx` response is a
+  reduced-confidence `FAIL` / `leak_detected` with note `control_unusable`;
+- without that canary the result is `INCONCLUSIVE` / `control_unusable`.
+
+A server error on the forbidden request or on a confirmation remains
+`INCONCLUSIVE` / `server_error`. Generic overlap is never used when the control
+could not establish what is generic.
+
+### Rule-declared scope
+
+`scope: caller` evaluates only the owner/other responses. A non-empty other
+response is `PASS` with note `caller_scoped` when it has no owner canary and no
+unique overlap at the configured threshold; a reproduced canary/overlap is
+`FAIL` / `leak_detected`. An empty or unparseable response is
+`INCONCLUSIVE` / `ambiguous_2xx`. The owner baseline must contain a declared
+canary, enforced by `require_owner_canary_in_baseline: true`.
+
+`scope: shared` is for catalogues and feeds. It is `PASS` with note
+`shared_data` when the other response and the owner baseline contain no owner
+canary. A canary in the other response is a reproduced `FAIL` /
+`leak_detected`; a baseline canary that is absent from the other response is
+`INCONCLUSIVE` / `ambiguous_2xx`.
+
+### Spec drift
+
+`--spec-check strict` (default) skips a selected path absent from the loaded
+inventory with `endpoint_absent` and tells the operator to use
+`--spec-check warn`. In `warn` mode the rule executes against a synthetic
+endpoint record, and the result carries `spec_drift: <path>`. JUnit exposes it
+as a `ledgerprobe.spec_drift` property and SARIF emits a warning notification.
+
 A would-be FAIL requires `confirm` additional observations. Every repeat must
 retain a qualifying original canary or all original overlap values (with at
 least the configured minimum). Missing/changed evidence or denial on a repeat yields
@@ -277,16 +316,19 @@ has a machine-readable `reason`. PASS annotations use `note`, not `reason`.
 | `FAIL` | `leak_detected` | Forbidden 2xx has a unique owner canary or sufficient unique overlap, and all configured repeats reproduce stable evidence. |
 | `FAIL` | `unauthenticated_leak` | The unauthenticated control exposes an owner canary or enough owner-specific baseline overlap with a valid nonexistent control. |
 | `INCONCLUSIVE` | `rate_limited` | Forbidden/control/confirmation response is 429. |
-| `INCONCLUSIVE` | `server_error` | Forbidden/control/confirmation response is 5xx. |
+| `INCONCLUSIVE` | `server_error` | Forbidden or confirmation response is 5xx. |
+| `INCONCLUSIVE` | `control_unusable` | Nonexistent-object control is 5xx/429/timeout without a reproducible owner canary. |
 | `INCONCLUSIVE` | `timeout` | Forbidden/control/confirmation request times out. |
 | `INCONCLUSIVE` | `not_reproducible` | Candidate evidence does not reproduce on every required confirmation. |
 | `INCONCLUSIVE` | `ambiguous_2xx` | Successful response is neither public nor a soft deny and has insufficient unique leak evidence. |
 | `INCONCLUSIVE` | `invalid_control` | Nonexistent-object control returns owner-like 2xx data or a canary; no independent, reproducible owner canary can prove a leak. No soft-deny PASS is permitted; public classification requires no owner-specific evidence or control canary. |
+| `PASS` | note: `caller_scoped` | Other identity received a non-empty 2xx caller-scoped response with no owner evidence. |
+| `PASS` | note: `shared_data` | Other identity received shared non-owner data with no owner canary in either baseline or response. |
 | `INCONCLUSIVE` | `unexpected_status` | Forbidden response is neither 2xx nor an accepted denial/overload status (e.g. redirect). |
 | `ERROR` | `baseline_not_2xx` / `baseline_timeout` / `baseline_missing_canary` | Primary baseline failed, timed out, or lacked required owner evidence. |
 | `ERROR` | `execution_error` / `invalid_canary` | Resolution/context/transport problem, or canary resolves to a non-scalar. |
 | legacy `FAIL` | `assertion_failed` | Legacy assertions did not all match; no differential traffic is added. |
-| existing `SKIPPED` | `safety_blocked` / `endpoint_absent` | Guard blocked a request, or selected endpoint is absent. |
+| existing `SKIPPED` | `safety_blocked` / `endpoint_absent` | Guard blocked a request, or strict spec check found the selected endpoint absent. |
 
 A 429/5xx/timeout/non-reproducible candidate is never a vulnerability finding.
 INCONCLUSIVE exits **0** by default (even when every executed check is
