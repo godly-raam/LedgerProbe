@@ -241,8 +241,18 @@ def _junit_results(path: Path) -> dict[str, dict[str, str | None]]:
             else:
                 verdict = "PASS"
         results[rule_id] = {"verdict": verdict, "reason": reason or "",
+                            "spec_drift": properties.get("spec_drift", ""),
                             "name": case.get("name") or ""}
     return results
+
+
+def _rule_scopes(path: Path) -> dict[str, str]:
+    """Read declared scopes from the differential rule file."""
+    document = yaml.safe_load(path.read_text(encoding="utf-8"))
+    if not isinstance(document, dict) or not isinstance(document.get("rules"), list):
+        return {}
+    return {rule["id"]: rule.get("scope", "object")
+            for rule in document["rules"] if isinstance(rule, dict) and rule.get("id")}
 
 
 def _substitute(value: Any, variables: dict[str, Any]) -> Any:
@@ -349,7 +359,7 @@ def run_scan(target: Target, instance: str, mode: str, base_url: str,
 
 
 def _score(cases: list[dict[str, Any]], results: dict[str, dict[str, str | None]],
-           instance: str) -> dict[str, Any]:
+           instance: str, scope_map: dict[str, str] | None = None) -> dict[str, Any]:
     counts = Counter({key: 0 for key in COUNT_KEYS})
     rows = []
     selected = [case for case in cases if case["instance"] == instance]
@@ -376,6 +386,7 @@ def _score(cases: list[dict[str, Any]], results: dict[str, dict[str, str | None]
             "rule_id": case["rule_id"], "method": case["method"], "path": case["path"],
             "label": case["label"], "verdict": verdict, "reason": reason,
             "outcome": outcome, "source": case["source"], "instance": instance,
+            "scope": (scope_map or {}).get(case["rule_id"], "object"),
         })
     if sum(counts.values()) != len(selected):
         raise AssertionError(f"{instance}: counts {dict(counts)} do not sum to {len(selected)} cases")
@@ -401,6 +412,20 @@ def _table_row(name: str, mode: str, summary: dict[str, Any], cases: int,
     return (f"| {name} | {mode} | {status} | {cases} | {c['TP']} | {c['FP']} | {c['TN']} | "
             f"{c['FN']} | {c['INC_VULN']} | {c['INC_SAFE']} | {_fmt(summary['precision'])} | "
             f"{_fmt(summary['recall'])} | {_fmt(summary['recall_excl_inconclusive'])} |")
+
+
+def _summary_from_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    counts = Counter({key: 0 for key in COUNT_KEYS})
+    for row in rows:
+        counts[row["outcome"]] += 1
+    tp, fp, tn, fn = (counts[key] for key in ("TP", "FP", "TN", "FN"))
+    inc_v = counts["INC_VULN"]
+    return {
+        "counts": dict(counts), "cases": len(rows),
+        "precision": tp / (tp + fp) if tp + fp else None,
+        "recall": tp / (tp + fn + inc_v) if tp + fn + inc_v else None,
+        "recall_excl_inconclusive": tp / (tp + fn) if tp + fn else None,
+    }
 
 
 def _diagnosis(row: dict[str, Any]) -> str:
@@ -449,6 +474,22 @@ def write_results(document: dict[str, Any], path: Path) -> None:
         "must sum to N; a runtime assertion enforces this. `INCONCLUSIVE` is "
         "never counted as correct.",
         "",
+        "## Object-scoped-only cut",
+        "",
+        "This cut keeps only cases whose rule declares `scope: object` (the default). "
+        "Scope is author-declared in the rule, never derived from a ground-truth label.",
+        "",
+        "| Target | Mode | Status | N | TP | FP | TN | FN | INC_vuln | INC_safe | Precision | Recall | Recall excl. INC |",
+        "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+    ]
+    for target_name, target_result in document["targets"].items():
+        if target_result["status"] != "ok":
+            continue
+        for mode, summary in target_result["modes"].items():
+            rows = [row for row in summary["rows"] if row.get("scope", "object") == "object"]
+            lines.append(_table_row(f"{target_name} (object)", mode, _summary_from_rows(rows), len(rows)))
+    lines += [
+        "",
         "## Determinism",
         "",
         "| Target | Mode | Runs | Identical verdicts | Flips |",
@@ -479,11 +520,11 @@ def write_results(document: dict[str, Any], path: Path) -> None:
         for mode, summary in target_result["modes"].items():
             lines.append(f"#### {mode}")
             lines.append("")
-            lines.append("| Case | Label | Verdict | Reason | Outcome | Source |")
-            lines.append("| --- | --- | --- | --- | --- | --- |")
+            lines.append("| Case | Scope | Label | Verdict | Reason | Outcome | Source |")
+            lines.append("| --- | --- | --- | --- | --- | --- | --- |")
             for row in summary["rows"]:
                 lines.append(
-                    f"| `{row['rule_id']}` {row['method']} `{row['path']}` | {row['label']} | "
+                    f"| `{row['rule_id']}` {row['method']} `{row['path']}` | {row.get('scope', 'object')} | {row['label']} | "
                     f"{row['verdict']} | {row['reason'] or '—'} | {row['outcome']} | {row['source']} |"
                 )
             lines.append("")
@@ -517,7 +558,7 @@ def _scan_mode(target: Target, mode: str, out: Path, base_urls: dict[str, str],
         ]
         _run(setup_command, timeout=240)
         results = run_scan(target, instance, mode, base, inputs, out, repeat)
-        summary = _score(cases, results, instance)
+        summary = _score(cases, results, instance, _rule_scopes(target.rules_differential))
         for key in COUNT_KEYS:
             combined["counts"][key] += summary["counts"][key]
         combined["rows"].extend(summary["rows"])

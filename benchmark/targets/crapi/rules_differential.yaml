@@ -1,7 +1,6 @@
-# Differential rules for crAPI. Public/self-scoped controls use no canary;
-# owner-specific endpoints require a baseline canary. Self-scoped safe
-# endpoints may be INCONCLUSIVE because the engine expects a denial, which is
-# reported honestly rather than turned into a finding.
+# Differential rules for crAPI. Scopes are declared from target source:
+# caller = response selected by the JWT subject; shared = catalogue/feed data
+# intentionally common to all identities. Object rules keep the default scope.
 rules:
   - id: crapi-vehicle-location
     name: Another user must not read a vehicle location
@@ -89,6 +88,10 @@ rules:
     auth_contexts:
       primary: owner
       forbidden: other
+    # Feed is shared across authenticated users by design
+    # (services/community/api/models/post.go:114-130); owner vehicle ids in it
+    # are the documented excessive-data-exposure issue.
+    scope: shared
     acceptable_status: [401, 403, 404]
     leak_detection:
       canaries: ["{{owner_vehicle_id}}"]
@@ -114,6 +117,9 @@ rules:
     parameters:
       path:
         vin: "{{owner_vin}}"
+    # The 1.1.6 route exists in the service source but is omitted from the
+    # published OpenAPI snapshot; execute it and report the drift.
+    spec_check: warn
     acceptable_status: [401, 403, 404]
     leak_detection:
       canaries: ["{{report_problem}}"]
@@ -136,9 +142,12 @@ rules:
     auth_contexts:
       primary: owner
       forbidden: other
+    # UserServiceImpl.getUserFromToken selects from the validated JWT subject.
+    scope: caller
+    require_owner_canary_in_baseline: true
     acceptable_status: [401, 403, 404]
     leak_detection:
-      canaries: []
+      canaries: ["{{owner_email}}"]
       min_unique_leaf_values: 6
       ignore_fields: []
     controls:
@@ -157,9 +166,12 @@ rules:
     auth_contexts:
       primary: owner
       forbidden: other
+    # VehicleServiceImpl.findAllByOwner_id(user.getId()) is JWT-scoped.
+    scope: caller
+    require_owner_canary_in_baseline: true
     acceptable_status: [401, 403, 404]
     leak_detection:
-      canaries: []
+      canaries: ["{{owner_vin}}"]
       min_unique_leaf_values: 6
       ignore_fields: []
     controls:
@@ -178,10 +190,18 @@ rules:
     auth_contexts:
       primary: owner
       forbidden: other
+    parameters:
+      query:
+        limit: 30
+        offset: 0
+    # OrderDetailsView filters Order.objects.filter(user=user); the spec also
+    # requires both pagination parameters (views.py:267-294).
+    scope: caller
+    require_owner_canary_in_baseline: true
     acceptable_status: [401, 403, 404]
     leak_detection:
-      canaries: []
-      min_unique_leaf_values: 6
+      canaries: ["{{owner_email}}"]
+      min_unique_leaf_values: 50
       ignore_fields: []
     controls:
       nonexistent_object: true
@@ -199,9 +219,12 @@ rules:
     auth_contexts:
       primary: owner
       forbidden: other
+    # Public shop catalogue; it contains no per-user object data
+    # (services/workshop/crapi/shop/views.py:52-80).
+    scope: shared
     acceptable_status: [401, 403, 404]
     leak_detection:
-      canaries: []
+      canaries: ["{{owner_email}}"]
       min_unique_leaf_values: 6
       ignore_fields: []
     controls:
