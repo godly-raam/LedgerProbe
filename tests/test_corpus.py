@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 import asyncio
+import copy
+import hashlib
+import json
 from pathlib import Path
 from unittest.mock import patch
 import pytest
@@ -21,14 +24,15 @@ from tests.fixtures.authz_server import (
 EXPECTATIONS = load_expectations()
 
 
-async def execute_profile(profile_name: str, tmp_path: Path) -> tuple[int, dict, Path, Path]:
+async def execute_profile(profile_name: str, tmp_path: Path, app=None) -> tuple[int, dict, Path, Path]:
     """Execute a single profile end-to-end through the real CLI path against the fixture server."""
     profile_spec = EXPECTATIONS[profile_name]
     rule_file = FIXTURES_DIR / profile_spec["rule_file"]
     sarif_path = tmp_path / "results.sarif"
     junit_path = tmp_path / "results.xml"
 
-    app = create_app(profile=profile_name, timeout_delay=0.15)
+    if app is None:
+        app = create_app(profile=profile_name, timeout_delay=0.15)
     transport = TimingOutASGITransport(app=app)
 
     def client_factory(**kwargs):
@@ -43,10 +47,12 @@ async def execute_profile(profile_name: str, tmp_path: Path) -> tuple[int, dict,
         "--rules", str(rule_file),
         "--inputs", str(INPUTS_PATH),
         "--timeout", str(cli_timeout),
-        "--read-only",
         "--sarif", str(sarif_path),
         "--junit", str(junit_path),
     ]
+    if profile_spec.get("read_only", True):
+        cli_args.append("--read-only")
+    cli_args.extend(profile_spec.get("extra_args", []))
     if profile_spec.get("spec_check"):
         cli_args.extend(["--spec-check", profile_spec["spec_check"]])
     args = ledgerprobe.arguments(cli_args)
@@ -100,6 +106,12 @@ def test_corpus_profile(profile_name: str, profile_spec: dict, tmp_path: Path):
         assert exit_code == 0, f"Profile {profile_name} expected exit code 0 on default INCONCLUSIVE, got {exit_code}"
     elif expected_verdict == "SKIPPED":
         assert exit_code == 2, f"Profile {profile_name} expected exit code 2 on SKIPPED, got {exit_code}"
+    elif expected_verdict == "ERROR":
+        assert exit_code == 2, f"Profile {profile_name} expected exit code 2 on ERROR, got {exit_code}"
+    if "expected_exit" in profile_spec:
+        assert exit_code == profile_spec["expected_exit"], (
+            f"Profile {profile_name}: expected exit {profile_spec['expected_exit']}, got {exit_code}"
+        )
 
     # Ensure sensitive canaries and context credentials are never leaked into reports
     sarif_content = sarif_path.read_text(encoding="utf-8")
@@ -140,3 +152,23 @@ def test_mutation_guard_catches_broken_overlap(tmp_path: Path, monkeypatch: pyte
     with pytest.raises(AssertionError):
         # Proves that the corpus expectation would fail on this regression
         assert result["verdict"] == EXPECTATIONS["bola_plain"]["expected_verdict"]
+
+
+def test_mutation_restore_returns_owner_state(tmp_path: Path):
+    app = create_app(profile="mutation_idempotent_restore")
+    before = copy.deepcopy(app.state.authz.objects)
+    exit_code, result, _, _ = asyncio.run(execute_profile("mutation_idempotent_restore", tmp_path, app=app))
+    assert exit_code == 1
+    assert result["verdict"] == "FAIL"
+    assert app.state.authz.objects == before
+
+
+def test_mutation_marker_is_not_serialized(tmp_path: Path):
+    app = create_app(profile="mutate_vuln_marker")
+    _, result, sarif_path, junit_path = asyncio.run(execute_profile("mutate_vuln_marker", tmp_path, app=app))
+    marker = app.state.authz.last_marker
+    assert marker
+    assert result["evidence"]["marker_hash"] == hashlib.sha256(marker.encode()).hexdigest()
+    assert marker not in sarif_path.read_text(encoding="utf-8")
+    assert marker not in junit_path.read_text(encoding="utf-8")
+    assert marker not in json.dumps(result)

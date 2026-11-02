@@ -71,7 +71,11 @@ def test_failed_baseline_is_error_not_security_finding(tmp_path):
 
 
 def test_read_only_blocks_mutation_before_any_http(tmp_path):
-    rule = {**RULE, "target_endpoints": [{"path": "/objects", "method": "POST"}]}
+    rule = {**RULE, "target_endpoints": [{"path": "/objects", "method": "POST"}],
+            "mutating": True,
+            "verify": {"mode": "marker", "readback": {"method": "GET", "path": "/objects/{{id}}"}},
+            "restore": [{"method": "POST", "path": "/objects"}]}
+    rule.pop("assertions")
     spec = {**SPEC, "paths": {"/objects": {"post": {"responses": {"200": {"description": "Created"}}}}}}
     def no_http(request):
         pytest.fail("blocked scan must not contact target")

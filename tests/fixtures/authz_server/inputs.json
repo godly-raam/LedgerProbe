@@ -12,6 +12,8 @@
   "variables": {
     "id": "obj-owner-1",
     "owner_id": "user_owner",
+    "owner_username": "user_owner",
+    "original_password": "owner-pass",
     "catalog_id": "catalog-1",
     "canary_value": "canary-secret-owner-9988"
   }

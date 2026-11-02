@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import os
 from pathlib import Path
@@ -64,6 +65,8 @@ class AuthzServerState:
         self.request_count = 0
         self.forbidden_call_count = 0
         self.cache: dict[Any, dict] = {}
+        self.objects = copy.deepcopy(SEEDED_DATA["objects"])
+        self.last_marker: str | None = None
 
 
 def get_identity(request: Request) -> str | None:
@@ -123,12 +126,11 @@ async def handle_object(request: Request) -> Response:
     identity = get_identity(request)
     obj_id = request.path_params.get("id")
 
-    owner_data = {
-        "id": "obj-owner-1",
-        "owner_id": "user_owner",
-        "canary": "canary-secret-owner-9988",
-        **SEEDED_DATA["static_fields"],
-    }
+    owner_data = {**SEEDED_DATA["static_fields"],
+                  **copy.deepcopy(app_state.objects["obj-owner-1"])}
+
+    if base_profile == "verify_500" and identity == "owner":
+        return JSONResponse({"error": "verification failed"}, status_code=500)
 
     if base_profile in {"control_500_with_canary_leak", "control_500_no_canary",
                          "control_429", "control_timeout"}:
@@ -314,12 +316,7 @@ async def handle_object(request: Request) -> Response:
                     }
                 },
             }, status_code=200)
-        return JSONResponse({
-            "id": "obj-owner-1",
-            "owner_id": "user_owner",
-            "canary": "canary-secret-owner-9988",
-            **SEEDED_DATA["static_fields"],
-        }, status_code=200)
+        return JSONResponse(owner_data, status_code=200)
 
     # 5. Forbidden caller (other user requesting owner's object)
     if fixed:
@@ -474,6 +471,57 @@ async def handle_not_in_spec(request: Request) -> Response:
     return JSONResponse({"error": "forbidden"}, status_code=403)
 
 
+async def handle_mutate(request: Request) -> Response:
+    """Mutation target used by restore/verify corpus profiles."""
+    state: AuthzServerState = request.app.state.authz
+    profile = get_profile(request)
+    base_profile = profile[:-6] if profile.endswith("_fixed") else profile
+    identity = get_identity(request)
+    obj_id = request.path_params.get("id")
+    if identity is None:
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    if obj_id != "obj-owner-1":
+        return JSONResponse({"error": "not found"}, status_code=404)
+    try:
+        payload = await request.json()
+    except Exception:
+        return JSONResponse({"error": "malformed"}, status_code=400)
+    if not isinstance(payload, dict):
+        return JSONResponse({"error": "malformed"}, status_code=400)
+
+    if identity == "other":
+        if isinstance(payload.get("marker"), str):
+            state.last_marker = payload["marker"]
+        if base_profile == "mutate_deny_403":
+            return JSONResponse({"error": "forbidden"}, status_code=403)
+        if base_profile == "mutate_200_noop_no_change":
+            return JSONResponse({"status": "accepted"}, status_code=200)
+    if identity == "owner" and base_profile == "restore_failure":
+        return JSONResponse({"error": "restore failed"}, status_code=500)
+
+    for key in ("marker", "password", "status"):
+        if key in payload:
+            if key == "marker" and not payload[key]:
+                state.objects["obj-owner-1"].pop("marker", None)
+            else:
+                state.objects["obj-owner-1"][key] = payload[key]
+    status = 204 if base_profile == "mutate_204_generic_changes_state" else 200
+    return Response(status_code=status)
+
+
+async def handle_login(request: Request) -> Response:
+    """Password probe target; failures are 200 with status=fail like VAmPI."""
+    state: AuthzServerState = request.app.state.authz
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    expected = state.objects["obj-owner-1"].get("password")
+    if payload.get("username") == "user_owner" and expected is not None and payload.get("password") == expected:
+        return JSONResponse({"status": "success"}, status_code=200)
+    return JSONResponse({"status": "fail"}, status_code=200)
+
+
 def create_app(profile: str | None = None, fixed: bool = False, timeout_delay: float = 0.2) -> Starlette:
     """Construct an ASGI application instance configured with the specified profile."""
     app = Starlette(routes=[
@@ -484,6 +532,8 @@ def create_app(profile: str | None = None, fixed: bool = False, timeout_delay: f
         Route("/api/v1/profile", handle_profile, methods=["GET"]),
         Route("/api/v1/shared", handle_shared, methods=["GET"]),
         Route("/api/v1/not-in-spec/{id}", handle_not_in_spec, methods=["GET"]),
+        Route("/api/v1/mutate/{id}", handle_mutate, methods=["PUT"]),
+        Route("/api/v1/login", handle_login, methods=["POST"]),
     ])
     app.state.authz = AuthzServerState(profile=profile, fixed=fixed, timeout_delay=timeout_delay)
     return app

@@ -350,6 +350,10 @@ def run_scan(target: Target, instance: str, mode: str, base_url: str,
     ]
     if target.read_only:
         command.append("--read-only")
+    if target.name == "vampi":
+        # The VAmPI differential set includes the password-mutation rule.
+        # The rule still carries verify/restore and is loopback-only here.
+        command.append("--allow-mutations")
     print(f"[*] {target.name}/{instance}/{mode}/run-{repeat}: {' '.join(command[1:5])} ...")
     completed = _run(command, timeout=300, check=False, allow_findings=True)
     if completed.returncode not in {0, 1}:
@@ -404,6 +408,10 @@ def _score(cases: list[dict[str, Any]], results: dict[str, dict[str, str | None]
 
 def _fmt(value: float | None) -> str:
     return "n/a" if value is None else f"{value * 100:.1f}%"
+
+
+def _target_mode(instance: str) -> str:
+    return {"vulnerable": "vulnerable=1", "secure": "vulnerable=0"}.get(instance, "single")
 
 
 def _table_row(name: str, mode: str, summary: dict[str, Any], cases: int,
@@ -520,12 +528,13 @@ def write_results(document: dict[str, Any], path: Path) -> None:
         for mode, summary in target_result["modes"].items():
             lines.append(f"#### {mode}")
             lines.append("")
-            lines.append("| Case | Scope | Label | Verdict | Reason | Outcome | Source |")
-            lines.append("| --- | --- | --- | --- | --- | --- | --- |")
+            lines.append("| Case | Scope | Target mode | Ground-truth label | Verdict | Reason | Outcome | Source |")
+            lines.append("| --- | --- | --- | --- | --- | --- | --- | --- |")
             for row in summary["rows"]:
                 lines.append(
-                    f"| `{row['rule_id']}` {row['method']} `{row['path']}` | {row.get('scope', 'object')} | {row['label']} | "
-                    f"{row['verdict']} | {row['reason'] or '—'} | {row['outcome']} | {row['source']} |"
+                    f"| `{row['rule_id']}` {row['method']} `{row['path']}` | {row.get('scope', 'object')} | "
+                    f"{_target_mode(row['instance'])} | {row['label']} | {row['verdict']} | "
+                    f"{row['reason'] or '—'} | {row['outcome']} | {row['source']} |"
                 )
             lines.append("")
         lines.append("#### FP, FN and INCONCLUSIVE diagnoses")
@@ -541,7 +550,7 @@ def write_results(document: dict[str, Any], path: Path) -> None:
                 f"{_diagnosis(row)} Source: {row['source']}."
             )
         lines.append("")
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    path.write_text("\n".join(lines).rstrip("\n") + "\n", encoding="utf-8")
 
 
 def _scan_mode(target: Target, mode: str, out: Path, base_urls: dict[str, str],
@@ -576,12 +585,13 @@ def _scan_mode(target: Target, mode: str, out: Path, base_urls: dict[str, str],
 
 
 def run_target(target: Target, out: Path, *, no_docker: bool, keep: bool,
-               base_urls: dict[str, str], repeats: int = 3) -> dict[str, Any]:
+               base_urls: dict[str, str], repeats: int = 3,
+               modes: Iterable[str] = MODES) -> dict[str, Any]:
     document, cases = _load_cases(target.ground_truth)
     try:
-        modes: dict[str, Any] = {}
+        results_by_mode: dict[str, Any] = {}
         determinism: dict[str, Any] = {}
-        for mode in MODES:
+        for mode in modes:
             run_summaries = []
             run_maps = []
             for repeat in range(1, repeats + 1):
@@ -603,9 +613,9 @@ def run_target(target: Target, out: Path, *, no_docker: bool, keep: bool,
                 values = [mapping.get(key, "MISSING") for mapping in run_maps]
                 if len(set(values)) > 1:
                     flips.append({"instance": key[0], "case": key[1], "verdicts": values})
-            modes[mode] = first
+            results_by_mode[mode] = first
             determinism[mode] = {"runs": repeats, "identical": not flips, "flips": flips}
-        return {"status": "ok", "modes": modes, "determinism": determinism,
+        return {"status": "ok", "modes": results_by_mode, "determinism": determinism,
                 "ground_truth": document}
     except Blocked as exc:
         return {"status": "blocked", "reason": str(exc), "ground_truth": document}
@@ -625,6 +635,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="update selected targets in an existing results.json")
     parser.add_argument("--repeats", type=int, default=1,
                         help="runs per mode, each preceded by a fresh target reset")
+    parser.add_argument("--modes", nargs="+", choices=MODES, default=list(MODES),
+                        help="benchmark modes to execute (default: all three)")
     parser.add_argument("--base-url-vulnerable", help="override VAmPI vulnerable instance URL")
     parser.add_argument("--base-url-secure", help="override VAmPI secure instance URL")
     parser.add_argument("--base-url-default", help="override the single-instance target URL")
@@ -660,7 +672,13 @@ def main(argv: list[str] | None = None) -> int:
             continue
         print(f"[*] target {name}: {', '.join(target.instances)}; {args.repeats} run(s)/mode")
         result = run_target(target, out, no_docker=args.no_docker, keep=args.keep,
-                            base_urls=base_urls, repeats=args.repeats)
+                            base_urls=base_urls, repeats=args.repeats, modes=args.modes)
+        if args.merge and result.get("status") == "ok":
+            previous = document.get("targets", {}).get(name, {})
+            if previous.get("status") == "ok":
+                result["modes"] = {**previous.get("modes", {}), **result["modes"]}
+                result["determinism"] = {**previous.get("determinism", {}),
+                                          **result.get("determinism", {})}
         document["targets"][name] = result
         if result["status"] != "ok":
             print(f"[!] {name}: {result['reason']}", file=sys.stderr)

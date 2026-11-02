@@ -1,16 +1,23 @@
 # LedgerProbe real-world benchmark
 
-LedgerProbe differential v2 result: **0 FP of 10 safe cases, 12 of 13 vulnerable
-cases detected, and 3 abstentions** (one vulnerable, two safe). The previous
-differential result was 0 FP of 10 safe cases, 10 of 13 vulnerable detected, and
-9 abstentions. This is a small, source-derived benchmark, not a population
-estimate.
+LedgerProbe differential v3 result: **0 FP of 10 safe cases, 13 of 13 vulnerable
+cases detected, and 1 abstention** (one safe crAPI case). The previous
+differential result was 0 FP of 10 safe cases, 12 of 13 vulnerable cases
+detected, and 3 abstentions. The original v1 result was 0 FP of 10 safe cases,
+10 of 13 vulnerable cases detected, and 9 abstentions.
 
-This benchmark measures whether LedgerProbe's differential authorization engine
-finds documented BOLA/IDOR on projects the engine's authors did not write. It
-compares the current engine with two legacy status-only baselines on identical
-endpoints. It is deliberately small and fully local; it is not a product
+v2 rules were authored after viewing v1 results; v1 is the pre-tuning number.
+v3 mutation rules were authored after viewing v2 results. This benchmark is
+small and source-derived, not a population estimate. It measures whether
+LedgerProbe's differential authorization engine finds documented BOLA/IDOR on
+projects the engine's authors did not write. It compares the current engine with
+two legacy status-only baselines on identical endpoints. It is not a product
 security assessment.
+
+The sample is **23 cases across 18 distinct endpoints**. VAmPI's 13 cases are 8
+distinct endpoints run in both target modes (`vulnerable=1` and `vulnerable=0`);
+the effective number of independent endpoint observations is therefore smaller
+than 23.
 
 ## Safety model
 
@@ -22,10 +29,26 @@ ports raise `UnsafeTarget` before a request is opened. `benchmark/tests` contain
 the hard-fail tests for that guard, including `8.8.8.8`, `169.254.169.254`,
 `127.0.0.1.evil.test` and `0.0.0.0`.
 
-Both Compose files publish only on `127.0.0.1`. The only target mutation in the
-VAmPI rule set is the documented password-change endpoint; all other rules are
-GETs. crAPI rules are read-only and the benchmark runs the engine with
-`--read-only`.
+Mutating rules must declare `mutating: true`; the YAML loader rejects any other
+rule whose target method is not GET/HEAD/OPTIONS. A mutating rule executes only
+when all three conditions hold:
+
+- `--allow-mutations` is present;
+- the target host is loopback or explicitly listed with `--allow-host`;
+- the scan is not `--read-only`.
+
+Otherwise the rule is `SKIPPED` with reason `mutation_blocked` and a message
+naming the missing condition. Every mutating rule requires a `restore:` block;
+restore runs through `GuardedClient` in a `finally` path, even after FAIL or
+ERROR. A failed restore is `ERROR restore_failed` and a non-zero exit. Mutation
+attempts are capped at one per rule, and a rule without a `verify:` block is
+`INCONCLUSIVE unverified_mutation` after a 2xx response.
+
+The VAmPI differential set includes the documented password-change mutation.
+crAPI rules are read-only and the benchmark runs the engine with `--read-only`.
+The legacy VAmPI status baseline is a historical v2 record and is not re-run in
+v3; its PUT rule predates the `mutating` contract and would need migration before
+a full legacy replay.
 
 ## Targets and versions
 
@@ -35,8 +58,9 @@ GETs. crAPI rules are read-only and the benchmark runs the engine with
 | crAPI | OWASP/crAPI `v1.1.6` source snapshot (`benchmark/.out/crapi-source`; its `VERSION` file is stale) | eight release images pinned by digest in `targets/crapi/compose.yaml`, including `crapi-identity` `1.1.6` | single deployment |
 
 The recorded v2 run used Docker Engine `28.5.2+dfsg4` and Compose `2.40.3-3`.
-VAmPI's only published tag is mutable, so its manifest digest is pinned. crAPI
-publishes a `1.1.6` tag only for `crapi-identity`; the other components only have
+The v3 VAmPI differential re-run used the same pinned image and stack. VAmPI's
+only published tag is mutable, so its manifest digest is pinned. crAPI publishes
+a `1.1.6` tag only for `crapi-identity`; the other components only have
 release-day `latest` images, which are pinned by digest rather than retagged.
 
 ## Ground truth provenance
@@ -48,11 +72,18 @@ source; no LedgerProbe output influenced them. Files:
 - `benchmark/ground_truth/vampi.yaml` — 13 cases: **8 vulnerable, 5 safe**.
 - `benchmark/ground_truth/crapi.yaml` — 10 cases: **5 vulnerable, 5 safe**.
 
+The 23 cases cover 18 distinct endpoints: VAmPI contributes 8 endpoints (each
+run in both target modes) and crAPI contributes 10. The secure VAmPI mode is not
+a fully patched deployment: three secure-mode endpoints remain vulnerable
+ground truth. In particular, `vampi-users-object` is labelled vulnerable in both
+target modes; a FAIL on the `vulnerable=0` row is a true positive for that
+label, not a false positive caused by the word "safe" in a target-mode column.
+
 The 1.1.5→1.1.6 reconciliation diffed every cited file. No label changed.
 `service_requests/{vin}` did not exist in 1.1.5 and was added without
 authentication in 1.1.6; it remains vulnerable ground truth.
 
-The final v2 run was checked with:
+The final v3 run was checked with:
 
 ```bash
 git diff bench-v1..HEAD -- benchmark/ground_truth
@@ -67,9 +98,9 @@ also copied to `benchmark/results_v1.md`.
    and seeds owner objects with unique canaries. Auth/setup lives in the target
    adapter, never in the engine. Inputs are written under
    `benchmark/.out/<target>/<instance>/inputs.json` with mode `0600` and are
-   gitignored.
-2. Three modes run through the same OpenAPI snapshot, base URLs, inputs and rate
-   limit:
+   gitignored. VAmPI setup also records `original_password` for the mutation
+   restore path.
+2. Modes run through the same OpenAPI snapshot, base URLs, inputs and rate limit:
    - **legacy_strict**: the engine's exact `403` status assertion. This is the
      naive baseline: it has no canary, control, confirmation or soft-deny logic.
    - **legacy_lenient**: a harness-level status evaluator, because the engine
@@ -78,10 +109,13 @@ also copied to `benchmark/results_v1.md`.
      baseline, not an engine mode.
    - **differential**: scoped owner/other comparison, owner canaries, existential
      controls, confirmations, and bounded pagination where applicable. Rules
-     declare `scope: object` (default), `caller`, or `shared`.
+     declare `scope: object` (default), `caller`, or `shared`. In v3, a mutating
+     rule uses `marker`, `probe` or `state_diff` verification and a mandatory
+     restore.
 3. Before every run, `benchmark/run.py` removes the Compose project and its
    volumes, starts it again with `--wait`, and re-runs setup. No target state
-   survives between runs.
+   survives between runs. The v3 VAmPI differential row used three fresh-reset
+   runs.
 4. JUnit is scored against frozen labels. `INCONCLUSIVE` on a vulnerable case is
    `INC_VULN`; on a safe case it is `INC_SAFE`. A skipped endpoint and an
    execution error are both inconclusive, never correct. Every row's six counts
@@ -89,19 +123,44 @@ also copied to `benchmark/results_v1.md`.
 5. `Recall` counts `INC_VULN` as a miss: `TP / (TP + FN + INC_VULN)`.
    `Recall excl. INC` is `TP / (TP + FN)`. `Precision` is `TP / (TP + FP)`.
 
+## Version comparison
+
+Differential mode only; the v3 run re-scored VAmPI and left crAPI unchanged.
+Cells are `TP/FP/TN/FN/INC_vuln/INC_safe`.
+
+| Target | v1 | v2 | v3 |
+| --- | --- | --- | --- |
+| VAmPI | 7/0/3/0/1/2 | 7/0/4/0/1/1 | 8/0/5/0/0/0 |
+| crAPI | 3/0/1/0/2/4 | 5/0/4/0/0/1 | 5/0/4/0/0/1 |
+| **Overall** | **10/0/4/0/3/6** | **12/0/8/0/1/2** | **13/0/9/0/0/1** |
+
+v2 rules were authored after viewing v1 results; v1 is the pre-tuning number.
+v3 mutation rules were authored after viewing v2 results. The v3 change is
+concentrated in the VAmPI password case: the forbidden mutation's generic 204
+response is now verified by an owner login probe, and the owner password is
+restored in a `finally` path.
+
 ## Results
+
+The v3 row is the re-run differential. The legacy rows are the recorded v2
+results; v3 did not re-run them.
 
 | Target | Mode | N | TP | FP | TN | FN | INC_vuln | INC_safe | Precision | Recall | Recall excl. INC |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | VAmPI | legacy_strict | 13 | 8 | 5 | 0 | 0 | 0 | 0 | 61.5% | 100.0% | 100.0% |
 | VAmPI | legacy_lenient | 13 | 8 | 4 | 1 | 0 | 0 | 0 | 66.7% | 100.0% | 100.0% |
-| VAmPI | differential | 13 | 7 | 0 | 4 | 0 | 1 | 1 | 100.0% | 87.5% | 100.0% |
+| VAmPI | differential (v3) | 13 | 8 | 0 | 5 | 0 | 0 | 0 | 100.0% | 100.0% | 100.0% |
 | crAPI | legacy_strict | 10 | 4 | 4 | 0 | 0 | 1 | 1 | 50.0% | 80.0% | 100.0% |
 | crAPI | legacy_lenient | 10 | 5 | 4 | 1 | 0 | 0 | 0 | 55.6% | 100.0% | 100.0% |
 | crAPI | differential | 10 | 5 | 0 | 4 | 0 | 0 | 1 | 100.0% | 100.0% | 100.0% |
 
-`benchmark/RESULTS.md` is the generated per-case report. All six v2 rows were
-identical across three fresh-reset runs; there were zero verdict flips.
+`benchmark/RESULTS.md` is the generated per-case report. The VAmPI differential
+v3 row was identical across three fresh-reset runs; there were zero verdict
+flips. The other five rows are the v2 records and were not re-run for v3.
+
+The overall differential inconclusive rate fell from **9/23 (39.1%)** in v1 to
+**3/23 (13.0%)** in v2 and **1/23 (4.3%)** in v3. The remaining abstention is
+`crapi-vehicles`, where the other identity has no vehicle to compare.
 
 ## Object-scoped-only cut
 
@@ -114,7 +173,7 @@ comparing against the legacy baselines.
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | VAmPI | legacy_strict | 6 | 4 | 2 | 0 | 0 | 0 | 0 | 66.7% | 100.0% | 100.0% |
 | VAmPI | legacy_lenient | 6 | 4 | 1 | 1 | 0 | 0 | 0 | 80.0% | 100.0% | 100.0% |
-| VAmPI | differential | 6 | 3 | 0 | 1 | 0 | 1 | 1 | 100.0% | 75.0% | 100.0% |
+| VAmPI | differential (v3) | 6 | 4 | 0 | 2 | 0 | 0 | 0 | 100.0% | 100.0% | 100.0% |
 | crAPI | legacy_strict | 5 | 3 | 1 | 0 | 0 | 1 | 0 | 75.0% | 75.0% | 100.0% |
 | crAPI | legacy_lenient | 5 | 4 | 0 | 1 | 0 | 0 | 0 | 100.0% | 100.0% | 100.0% |
 | crAPI | differential | 5 | 4 | 0 | 1 | 0 | 0 | 0 | 100.0% | 100.0% | 100.0% |
@@ -125,53 +184,56 @@ Aggregate differential object-only cut:
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | v1 object-only | 11 | 5 | 0 | 2 | 0 | 3 | 1 | 62.5% | 36.4% |
 | v2 object-only | 11 | 7 | 0 | 2 | 0 | 1 | 1 | 87.5% | 18.2% |
-
-The overall differential inconclusive rate fell from **9/23 (39.1%)** in v1 to
-**3/23 (13.0%)** in v2. The object-only rate fell from **4/11 (36.4%)** to
-**2/11 (18.2%)**.
+| v3 object-only | 11 | 8 | 0 | 3 | 0 | 0 | 0 | 100.0% | 0.0% |
 
 ## Determinism
 
-All six target/mode rows produced identical verdicts in all three v2 runs. There
-were **zero flips**. The per-run comparison is in `benchmark/RESULTS.md`; the
-three reset cycles also reproduced the same counts.
+The VAmPI differential v3 row produced identical verdicts in all three
+fresh-reset runs; there were **zero flips**. The legacy and crAPI rows are the
+v2 determinism records. The per-run comparison is in `benchmark/RESULTS.md`.
 
 ## Before and after, per case
 
-The table is the differential mode, which is the engine mode changed by this
-work. The legacy baselines are included in the results table above. “Same”
-means the verdict did not change; reason changes without a verdict change are
-called out in the diagnosis.
+Differential mode. "Target mode" is the deployment switch or single deployment
+used for that row; it is not a ground-truth label. "Ground-truth label" is the
+frozen label in `benchmark/ground_truth/`. “Same” means the verdict did not
+change; reason changes without a verdict change are called out in the findings.
 
-| Target | Case | v1 verdict | v2 verdict | Reason for change |
-| --- | --- | --- | --- | --- |
-| VAmPI | `vampi-books-object` vulnerable | FAIL | FAIL | Same |
-| VAmPI | `vampi-users-password` vulnerable | INCONCLUSIVE | INCONCLUSIVE | Same; generic 204 has no owner canary |
-| VAmPI | `vampi-users-object` vulnerable | FAIL | FAIL | Same |
-| VAmPI | `vampi-users-list` vulnerable | FAIL | FAIL | Same verdict; shared scope now uses the owner-email canary |
-| VAmPI | `vampi-users-debug` vulnerable | FAIL | FAIL | Same verdict; shared scope now uses the owner-email canary |
-| VAmPI | `vampi-home` safe | PASS | PASS | Same; shared-data note |
-| VAmPI | `vampi-book-list` safe | PASS | PASS | Same; shared-data note |
-| VAmPI | `vampi-me` safe | INCONCLUSIVE | PASS | Caller scope: other identity's own profile is non-empty and has no owner canary |
-| VAmPI | `vampi-books-object` safe | PASS | PASS | Same |
-| VAmPI | `vampi-users-password` safe | INCONCLUSIVE | INCONCLUSIVE | Same; generic 204 remains ambiguous |
-| VAmPI | `vampi-users-object` safe | FAIL | FAIL | Same |
-| VAmPI | `vampi-users-list` safe | FAIL | FAIL | Same |
-| VAmPI | `vampi-users-debug` safe | FAIL | FAIL | Same |
-| crAPI | `crapi-vehicle-location` | FAIL | FAIL | Same |
-| crAPI | `crapi-mechanic-report` | FAIL | FAIL | Same |
-| crAPI | `crapi-order-object` | INCONCLUSIVE | FAIL | Control 500 is `control_unusable`; reproduced owner canary yields reduced-confidence FAIL |
-| crAPI | `crapi-community-recent` | FAIL | FAIL | Same; shared scope uses the vehicle-id canary |
-| crAPI | `crapi-service-requests-vin` | SKIPPED | FAIL | `spec_check: warn` executes the route missing from the published spec |
-| crAPI | `crapi-dashboard` | INCONCLUSIVE | PASS | Caller scope: other identity's dashboard is non-empty and owner-canary-free |
-| crAPI | `crapi-vehicles` | INCONCLUSIVE | INCONCLUSIVE | Other identity has an empty vehicle list, so caller scope remains ambiguous |
-| crAPI | `crapi-orders-all` | ERROR | PASS | Rule supplies required `limit`/`offset`; caller scope passes |
-| crAPI | `crapi-products` | INCONCLUSIVE | PASS | Shared catalogue has no owner canary |
-| crAPI | `crapi-video-object` | PASS | PASS | Same |
+| Target | Case | Target mode | Ground-truth label | v1 | v2 | v3 | Reason for change |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| VAmPI | `vampi-books-object` | `vulnerable=1` | vulnerable | FAIL | FAIL | FAIL | Same |
+| VAmPI | `vampi-users-password` | `vulnerable=1` | vulnerable | INCONCLUSIVE | INCONCLUSIVE | FAIL | v3 owner-login probe proves the password changed |
+| VAmPI | `vampi-users-object` | `vulnerable=1` | vulnerable | FAIL | FAIL | FAIL | Same |
+| VAmPI | `vampi-users-list` | `vulnerable=1` | vulnerable | FAIL | FAIL | FAIL | Same; shared scope uses the owner-email canary |
+| VAmPI | `vampi-users-debug` | `vulnerable=1` | vulnerable | FAIL | FAIL | FAIL | Same; shared scope uses the owner-email canary |
+| VAmPI | `vampi-home` | `vulnerable=1` | safe | PASS | PASS | PASS | Same; shared-data note |
+| VAmPI | `vampi-book-list` | `vulnerable=1` | safe | PASS | PASS | PASS | Same; shared-data note |
+| VAmPI | `vampi-me` | `vulnerable=1` | safe | INCONCLUSIVE | PASS | PASS | Caller scope: other identity's own profile is non-empty and has no owner canary |
+| VAmPI | `vampi-books-object` | `vulnerable=0` | safe | PASS | PASS | PASS | Same |
+| VAmPI | `vampi-users-password` | `vulnerable=0` | safe | INCONCLUSIVE | INCONCLUSIVE | PASS | v3 probe shows the owner password was unchanged (`no_effect`) |
+| VAmPI | `vampi-users-object` | `vulnerable=0` | vulnerable | FAIL | FAIL | FAIL | Same; secure mode still exposes the profile |
+| VAmPI | `vampi-users-list` | `vulnerable=0` | vulnerable | FAIL | FAIL | FAIL | Same; secure mode still exposes the directory |
+| VAmPI | `vampi-users-debug` | `vulnerable=0` | vulnerable | FAIL | FAIL | FAIL | Same; debug endpoint remains vulnerable |
+| crAPI | `crapi-vehicle-location` | single | vulnerable | FAIL | FAIL | FAIL | Same |
+| crAPI | `crapi-mechanic-report` | single | vulnerable | FAIL | FAIL | FAIL | Same |
+| crAPI | `crapi-order-object` | single | vulnerable | INCONCLUSIVE | FAIL (reduced confidence; control returned 500) | FAIL (reduced confidence; control returned 500) | Reproduced owner canary yields a reduced-confidence FAIL |
+| crAPI | `crapi-community-recent` | single | vulnerable | FAIL | FAIL | FAIL | Same; shared scope uses the vehicle-id canary |
+| crAPI | `crapi-service-requests-vin` | single | vulnerable | SKIPPED | FAIL | FAIL | `spec_check: warn` executes the route missing from the published spec |
+| crAPI | `crapi-dashboard` | single | safe | INCONCLUSIVE | PASS | PASS | Caller scope: other dashboard is non-empty and owner-canary-free |
+| crAPI | `crapi-vehicles` | single | safe | INCONCLUSIVE | INCONCLUSIVE | INCONCLUSIVE | Other identity has an empty vehicle list; abstention is correct |
+| crAPI | `crapi-orders-all` | single | safe | ERROR | PASS | PASS | Rule supplies required `limit`/`offset`; caller scope passes |
+| crAPI | `crapi-products` | single | safe | INCONCLUSIVE | PASS | PASS | Shared catalogue has no owner canary |
+| crAPI | `crapi-video-object` | single | safe | PASS | PASS | PASS | Same |
 
-No case got a worse verdict. `crapi-vehicles` is the one safe caller case that
-did not become a PASS: the second identity has no vehicle, and the caller-scope
-contract deliberately treats an empty successful response as
+`crapi-order-object` is a **reduced-confidence FAIL** in v2 and v3. Its
+nonexistent-object control returned 500 (`control_unusable`), so the negative
+control could not separate generic overlap from owner data. The owner canary was
+still reproducible, which is why the result is FAIL rather than INCONCLUSIVE,
+but it should not be read with the confidence of the other findings.
+
+No case got a worse verdict in v3. `crapi-vehicles` is the one safe caller case
+that remains an abstention: the second identity has no vehicle, and the
+caller-scope contract deliberately treats an empty successful response as
 `ambiguous_2xx`, not a vacuous pass.
 
 ## VAmPI findings
@@ -183,12 +245,14 @@ contract deliberately treats an empty successful response as
 - **legacy_lenient FP (4):** the same rows except secure `vampi-books-object`
   (404 becomes TN). The safe self-password update still returns 204 and remains
   FP.
-- **differential INC_VULN:** `vampi-users-password` on `vulnerable=1`. VAmPI
-  returns a generic 204 with no owner canary; the password change is real but
-  its response cannot prove which account changed.
-- **differential INC_SAFE:** secure `vampi-users-password` returns the same
-  generic 204.
-- `vampi-me`, `vampi-home`, and `vampi-book-list` are now safe PASSes under
+- **v3 differential password case:** on `vulnerable=1`, the forbidden PUT
+  returns 204 and changes the owner's password. VAmPI's source
+  (`api_views/users.py:186-196`) updates the username in the path in that mode.
+  The owner-login probe with the new password returns an `auth_token`, so the
+  verdict is `FAIL state_changed_by_other`. On `vulnerable=0`, the same PUT
+  targets the JWT subject instead, the owner-login probe fails, and the verdict
+  is `PASS no_effect`. The owner password is restored after either outcome.
+- `vampi-me`, `vampi-home`, and `vampi-book-list` are safe PASSes under
   caller/shared scope. The user directory and debug endpoints still fail
   because they expose the owner email to another identity.
 
@@ -201,13 +265,14 @@ contract deliberately treats an empty successful response as
 - **legacy_lenient:** 5 TP, including `service-requests-vin`; 4 FP; `video-object`
   is TN (404).
 - **differential:** 5 TP, 4 TN, 1 `INC_SAFE` (`vehicles`), no FP or FN.
-  `order-object` now fails with `leak_detected` and note `control_unusable`;
+  `order-object` fails with `leak_detected` and note `control_unusable`;
   `service-requests-vin` fails via `unauthenticated_leak` after spec-drift
   execution; dashboard, orders-all, and products are safe PASSes.
 - **`crapi-vehicles` (`INC_SAFE`, `ambiguous_2xx`):** the other identity has no
   vehicle list. Caller scope requires a non-empty other response before a PASS,
   so an empty successful list remains ambiguous. Seeding a vehicle for the other
-  identity would change the fixture, not the semantics.
+  identity would change the fixture, not the semantics. The abstention is
+  correct.
 
 ## ZAP relevance
 
@@ -220,12 +285,14 @@ headers, server-version disclosure, server errors and content-type issues. There
 was **no BOLA/IDOR alert** that maps to a ground-truth case. ZAP was
 unauthenticated and has no two-identity owner/other comparison, so it neither
 confirms nor refutes the differential results and does not affect any score. It
-was not rerun for v2 because the engine changes do not alter target content.
+was not rerun for v3 because the engine changes do not alter target content.
 
 ## Remaining gaps
 
-- State-changing BOLA without an owner-specific response body stays
-  INCONCLUSIVE.
+- A mutating rule without `verify:` remains `INCONCLUSIVE unverified_mutation`.
+  The engine never guesses PASS or FAIL from a generic 2xx body.
+- Mutation execution is opt-in and host-limited; it is not enabled in the default
+  CI scan. A missing `restore:` is a loader error.
 - An empty successful caller response is treated as ambiguous; a caller with no
   objects cannot produce a vacuous PASS.
 - `control_unusable` findings are deliberately reduced-confidence: the missing
@@ -235,20 +302,26 @@ was not rerun for v2 because the engine changes do not alter target content.
 - Scope is declared by the rule author. A wrong `caller` or `shared`
   declaration can weaken or misclassify a check; the benchmark cites the target
   source in each rule comment, but this is not independent verification.
+- The VAmPI legacy status baseline is a v2 record. Its PUT rule predates the
+  `mutating` contract; migrating it before a full legacy replay is future work.
 - ZAP's baseline is not an authorization oracle, and crAPI has no secure/fixed
   deployment for comparison.
 
 ## Limitations
 
-- The sample is 23 endpoint cases (13 VAmPI, 10 crAPI), not a population. There
+- The sample is **23 cases across 18 distinct endpoints** (13 VAmPI cases over 8
+  endpoints, run in both target modes; 10 crAPI cases), not a population. There
   are no confidence intervals or inter-rater checks; three repeats establish
   determinism, not statistical significance.
 - The engine, rules, and benchmark share the same author. Ground truth was frozen
   first, but endpoint selection, canaries, and scope declarations still reflect
-  knowledge of the targets.
+  knowledge of the targets. v2 was authored after v1 results and v3 after v2
+  results; v1 is the pre-tuning number.
 - Scope declarations are author-supplied and were not independently audited.
 - VAmPI's ground truth mixes unauthenticated directory/debug exposure with
-  classic object BOLA; it is not a pure BOLA benchmark.
+  classic object BOLA; it is not a pure BOLA benchmark. The `vulnerable=0` mode
+  is not a full fix, so a safe-looking target-mode label is not a ground-truth
+  label.
 - crAPI is a single deployment. Its safe cases are token-scoped controls, not a
   patched/secure version.
 - The exact-403 baseline is intentionally strict; 404 and 204 are treated as
@@ -261,12 +334,11 @@ was not rerun for v2 because the engine changes do not alter target content.
 
 ## What could not run
 
-- All required benchmark targets and all three modes ran in v2. There is no
-  remaining Docker blocker.
+- The v3 VAmPI differential mode and all crAPI modes ran. VAmPI legacy modes
+  were not re-run for v3; their rows are the recorded v2 results because the
+  legacy rule file predates the `mutating` contract.
 - `crapi-vehicles` could not produce a caller-scoped PASS because the other test
   identity has no vehicle, so its successful response is an empty list.
-- `vampi-users-password` remains inconclusive in both vulnerable and secure
-  modes because its 204 response has no owner evidence.
 - A ZAP active scan and an authenticated ZAP scan were not run. The safe
   baseline is the only ZAP evidence.
 - crAPI has no secure/fixed deployment, so there is no crAPI secure-mode
@@ -274,27 +346,25 @@ was not rerun for v2 because the engine changes do not alter target content.
 
 ## Reproduce
 
-With Docker and Compose v2 available, one command for both targets:
+With Docker and Compose v2 available, the v3 VAmPI differential re-score is:
 
 ```bash
-python benchmark/run.py --target all --repeats 3
+.venv/bin/python benchmark/run.py --target vampi --modes differential --repeats 3 --merge
 ```
 
-Or one command per target (the second merges into the first target's results):
+This starts the pinned Compose stack, resets it before every run, runs setup,
+executes the differential mode three times, checks that every count row sums to
+N, merges the differential row into the existing results, writes
+`benchmark/RESULTS.md` and `benchmark/.out/results.json`, and removes the
+Compose project. Add `--keep` to inspect the stack after the final run.
 
-```bash
-python benchmark/run.py --target vampi --repeats 3
-python benchmark/run.py --target crapi --repeats 3 --merge
-```
-
-Each command starts the pinned Compose stack, resets it before every run, runs
-setup, executes all three modes three times, checks that every count row sums to
-N, writes `benchmark/RESULTS.md` and `benchmark/.out/results.json`, and removes
-the Compose projects. Add `--keep` to inspect the stack after the final run.
-The pre-change results remain at `benchmark/results_v1.md`.
+A full legacy replay would additionally require migrating
+`benchmark/targets/vampi/rules_legacy.yaml` to the `mutating` contract; the
+recorded legacy rows above are the v2 baseline. The pre-change results remain at
+`benchmark/results_v1.md`.
 
 Run the guard/scorer tests with:
 
 ```bash
-python -m pytest benchmark/tests -q
+.venv/bin/python -m pytest benchmark/tests -q
 ```

@@ -215,6 +215,70 @@ def evaluate_scoped(*, scope: str, baseline: dict, forbidden: dict,
                           require_owner_canary_in_baseline=require_owner_canary_in_baseline)
 
 
+def evaluate_mutation(*, mutation: dict, verification: dict | None = None,
+                      acceptable_status=(401, 403, 404),
+                      restore_failed: bool = False) -> dict:
+    """Pure verdict for a forbidden mutation and its proof of effect.
+
+    ``verification`` is produced by the executor and may contain only a
+    sanitized state (``changed``/``unchanged``/``unavailable``), hashes, and a
+    probe status. Raw request or response data must never reach this function.
+    """
+    evidence = {"mutation_status": (mutation or {}).get("status")}
+    for name in ("verification_mode", "marker_hash", "before_hash", "after_hash"):
+        value = (verification or {}).get(name)
+        if isinstance(value, str) and value:
+            evidence[name] = value
+    for name in ("changed", "probe_matched"):
+        value = (verification or {}).get(name)
+        if type(value) is bool:
+            evidence[name] = value
+    for name in ("probe_status",):
+        value = (verification or {}).get(name)
+        if type(value) is int and 100 <= value <= 599:
+            evidence[name] = value
+    if restore_failed:
+        evidence["restore_failed"] = True
+
+    def result(status, message, reason=None, note=None, confidence="reduced"):
+        verdict = {"passed": "PASS", "failed": "FAIL", "inconclusive": "INCONCLUSIVE",
+                   "error": "ERROR"}[status]
+        output = _output(status, verdict, message, reason=reason, note=note,
+                         confidence=confidence, evidence=evidence)
+        return output
+
+    if restore_failed:
+        return result("error", "State restoration failed after the mutation check.",
+                      "restore_failed")
+    problem = _problem(mutation)
+    if problem:
+        messages = {"timeout": "Mutation request timed out.",
+                    "rate_limited": "Mutation request was rate limited.",
+                    "server_error": "Mutation request received a server error."}
+        return result("inconclusive", messages[problem], problem)
+    status = (mutation or {}).get("status", 0)
+    if status in set(acceptable_status) and not 200 <= status < 300:
+        return result("passed", "Forbidden mutation was denied.", confidence="high")
+    if not 200 <= status < 300:
+        return result("inconclusive", "Mutation returned an unexpected status.",
+                      "unexpected_status")
+    if verification is None:
+        return result("inconclusive", "Successful mutation has no verification block.",
+                      "unverified_mutation")
+    state = verification.get("state")
+    if state == "unavailable":
+        return result("inconclusive", "State verification was unavailable.",
+                      "verify_unavailable")
+    if state == "changed":
+        return result("failed", "Forbidden mutation changed owner state.",
+                      "state_changed_by_other", confidence="high")
+    if state == "unchanged":
+        return result("passed", "Forbidden mutation did not change owner state.",
+                      note="no_effect", confidence="high")
+    return result("inconclusive", "State verification returned no usable result.",
+                  "verify_unavailable")
+
+
 def evaluate_differential(*, baseline: dict, forbidden: dict,
                           acceptable_status=(401, 403, 404), canaries=(),
                           min_unique_leaf_values: int = 2, ignore_fields=(),

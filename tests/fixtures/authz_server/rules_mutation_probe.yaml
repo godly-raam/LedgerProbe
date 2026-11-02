@@ -1,0 +1,38 @@
+id: authz-mutate-probe
+name: Forbidden password change must be proven by login
+severity: HIGH
+owasp_category: API1:2023
+cvss_score: 8.1
+target_endpoints:
+  - path: /api/v1/mutate/{id}
+    method: PUT
+auth_contexts:
+  primary: owner
+  forbidden: other
+parameters:
+  path:
+    id: "{{id}}"
+mutating: true
+body:
+  password: "{{marker}}"
+acceptable_status: [401, 403, 404]
+verify:
+  mode: probe
+  request:
+    method: POST
+    path: /api/v1/login
+    auth: none
+    body:
+      username: "{{owner_username}}"
+      password: "{{marker}}"
+  expected_status: 200
+  response_body:
+    path: status
+    expected: success
+restore:
+  - method: PUT
+    path: /api/v1/mutate/{{id}}
+    auth: primary
+    body:
+      password: "{{original_password}}"
+confirm: 1

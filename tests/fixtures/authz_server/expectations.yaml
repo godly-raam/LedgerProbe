@@ -348,3 +348,134 @@ endpoint_not_in_spec_warn:
   expected_spec_drift: /api/v1/not-in-spec/{id}
   rule_file: rules_missing.yaml
   description: "Warn spec check executes the path and reports spec_drift"
+
+mutate_vuln_marker:
+  category: vulnerable
+  expected_verdict: FAIL
+  expected_reason: state_changed_by_other
+  expected_note: null
+  rule_file: rules_mutation_marker.yaml
+  read_only: false
+  extra_args: ["--allow-mutations", "--allow-host", "authz.test"]
+  description: "Forbidden mutation changes owner marker state"
+
+mutate_vuln_probe_password:
+  category: vulnerable
+  expected_verdict: FAIL
+  expected_reason: state_changed_by_other
+  expected_note: null
+  rule_file: rules_mutation_probe.yaml
+  read_only: false
+  extra_args: ["--allow-mutations", "--allow-host", "authz.test"]
+  description: "Forbidden password mutation is proven by a successful login probe"
+
+mutate_vuln_state_diff:
+  category: vulnerable
+  expected_verdict: FAIL
+  expected_reason: state_changed_by_other
+  expected_note: null
+  rule_file: rules_mutation_state_diff.yaml
+  read_only: false
+  extra_args: ["--allow-mutations", "--allow-host", "authz.test"]
+  description: "Forbidden mutation changes an owner field observed by state_diff"
+
+mutate_deny_403:
+  category: safe
+  expected_verdict: PASS
+  expected_reason: null
+  expected_note: null
+  rule_file: rules_mutation_marker.yaml
+  read_only: false
+  extra_args: ["--allow-mutations", "--allow-host", "authz.test"]
+  description: "Forbidden mutation is denied with 403"
+
+mutate_200_noop_no_change:
+  category: safe
+  expected_verdict: PASS
+  expected_reason: null
+  expected_note: no_effect
+  rule_file: rules_mutation_marker.yaml
+  read_only: false
+  extra_args: ["--allow-mutations", "--allow-host", "authz.test"]
+  description: "Mutation returns 200 but marker readback is unchanged"
+
+mutate_204_generic_changes_state:
+  category: vulnerable
+  expected_verdict: FAIL
+  expected_reason: state_changed_by_other
+  expected_note: null
+  rule_file: rules_mutation_probe.yaml
+  read_only: false
+  extra_args: ["--allow-mutations", "--allow-host", "authz.test"]
+  description: "VAmPI shape: generic 204 still changes owner state and probe proves it"
+
+mutate_unverified:
+  category: tricky
+  expected_verdict: INCONCLUSIVE
+  expected_reason: unverified_mutation
+  expected_note: null
+  rule_file: rules_mutation_unverified.yaml
+  read_only: false
+  extra_args: ["--allow-mutations", "--allow-host", "authz.test"]
+  description: "Successful mutation without a verify block is inconclusive"
+
+verify_500:
+  category: tricky
+  expected_verdict: INCONCLUSIVE
+  expected_reason: verify_unavailable
+  expected_note: null
+  rule_file: rules_mutation_marker.yaml
+  read_only: false
+  extra_args: ["--allow-mutations", "--allow-host", "authz.test"]
+  description: "Owner readback returns 500 during verification"
+
+restore_failure:
+  category: tricky
+  expected_verdict: ERROR
+  expected_reason: restore_failed
+  expected_note: null
+  expected_exit: 2
+  rule_file: rules_mutation_marker.yaml
+  read_only: false
+  extra_args: ["--allow-mutations", "--allow-host", "authz.test"]
+  description: "Restore returns 500 and makes the check an execution error"
+
+mutation_blocked_no_flag:
+  category: tricky
+  expected_verdict: SKIPPED
+  expected_reason: mutation_blocked
+  expected_note: null
+  rule_file: rules_mutation_marker.yaml
+  read_only: false
+  extra_args: ["--allow-host", "authz.test"]
+  description: "Mutation is skipped without --allow-mutations"
+
+mutation_blocked_host_not_allowed:
+  category: tricky
+  expected_verdict: SKIPPED
+  expected_reason: mutation_blocked
+  expected_note: null
+  rule_file: rules_mutation_marker.yaml
+  read_only: false
+  extra_args: ["--allow-mutations"]
+  description: "Mutation is skipped when the non-loopback target host is not allowlisted"
+
+mutation_blocked_read_only:
+  category: tricky
+  expected_verdict: SKIPPED
+  expected_reason: mutation_blocked
+  expected_note: null
+  rule_file: rules_mutation_marker.yaml
+  read_only: true
+  extra_args: ["--allow-mutations", "--allow-host", "authz.test"]
+  description: "Mutation is skipped when --read-only is set"
+
+mutation_idempotent_restore:
+  category: vulnerable
+  expected_verdict: FAIL
+  expected_reason: state_changed_by_other
+  expected_note: null
+  rule_file: rules_mutation_marker.yaml
+  read_only: false
+  extra_args: ["--allow-mutations", "--allow-host", "authz.test"]
+  description: "A detected mutation is restored before the check returns"

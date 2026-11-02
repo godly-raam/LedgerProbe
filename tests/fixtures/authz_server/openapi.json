@@ -122,6 +122,37 @@
           }
         }
       }
+    },
+    "/api/v1/mutate/{id}": {
+      "put": {
+        "operationId": "mutateObject",
+        "summary": "Mutation target for restore and verification tests",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {"type": "string"}
+          }
+        ],
+        "responses": {
+          "200": {"description": "Mutation accepted"},
+          "204": {"description": "Mutation accepted without a body"},
+          "401": {"description": "Unauthorized"},
+          "403": {"description": "Forbidden"},
+          "404": {"description": "Not Found"}
+        }
+      }
+    },
+    "/api/v1/login": {
+      "post": {
+        "operationId": "loginProbe",
+        "summary": "Password probe target",
+        "responses": {
+          "200": {"description": "Login result"},
+          "401": {"description": "Unauthorized"}
+        }
+      }
     }
   }
 }

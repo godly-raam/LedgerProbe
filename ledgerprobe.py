@@ -55,6 +55,10 @@ def arguments(argv=None) -> argparse.Namespace:
     parser.add_argument("--concurrency", type=positive_int, default=4)
     parser.add_argument("--timeout", type=positive_float, default=15.0)
     parser.add_argument("--read-only", action="store_true", help="block all methods except GET/HEAD/OPTIONS")
+    parser.add_argument("--allow-mutations", action="store_true",
+                        help="allow rules that declare mutating: true (requires a non-read-only scan)")
+    parser.add_argument("--allow-host", action="append", default=[], metavar="HOST",
+                        help="additional target host permitted for mutating rules; repeatable")
     parser.add_argument("--fail-on-inconclusive", action="store_true",
                         help="return exit 1 when executed checks are inconclusive")
     parser.add_argument("--spec-check", choices=("strict", "warn"), default="strict",
@@ -107,7 +111,10 @@ async def execute(args: argparse.Namespace) -> int:
             for endpoint in inventory["endpoints"]:
                 endpoint.pop("base_url", None)
         print(f"[*] {len(inventory['endpoints'])} endpoints; {len(inventory['graph'])} dependency candidates")
-        results = await run_rules(inventory, rules, client, spec_check=args.spec_check, **inputs)
+        results = await run_rules(inventory, rules, client, spec_check=args.spec_check,
+                                  allow_mutations=args.allow_mutations,
+                                  allowed_hosts=args.allow_host, read_only=args.read_only,
+                                  **inputs)
     source_uri = None
     if urlsplit(args.spec).scheme not in {"http", "https"}:
         try:

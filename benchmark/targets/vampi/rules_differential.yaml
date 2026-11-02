@@ -41,17 +41,34 @@ rules:
     parameters:
       path:
         username: "{{owner_username}}"
+    # VAmPI source: api_views/users.py:186-196. With vulnerable=1 the handler
+    # updates the username from the path; with vulnerable=0 it ignores the path
+    # and updates the JWT subject. The 204 body proves neither case, so verify
+    # by logging in as the owner with the attempted new password.
+    mutating: true
     body:
       password: "{{new_password}}"
     acceptable_status: [401, 403, 404]
-    leak_detection:
-      canaries: []
-      min_unique_leaf_values: 5
-      ignore_fields: []
-    controls:
-      nonexistent_object: true
-      unauthenticated: true
-    confirm: 2
+    verify:
+      mode: probe
+      request:
+        method: POST
+        path: /users/v1/login
+        auth: none
+        body:
+          username: "{{owner_username}}"
+          password: "{{new_password}}"
+      expected_status: 200
+      response_body:
+        path: auth_token
+        exists: true
+    restore:
+      - method: PUT
+        path: /users/v1/{{owner_username}}/password
+        auth: primary
+        body:
+          password: "{{original_password}}"
+    confirm: 1
 
   - id: vampi-users-object
     name: Another user must not read a profile object

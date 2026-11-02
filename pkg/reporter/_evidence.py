@@ -4,7 +4,9 @@ import re
 _REASONS = {"unauthenticated_leak", "leak_detected", "assertion_failed", "baseline_not_2xx", "baseline_timeout", "baseline_missing_canary",
             "rate_limited", "server_error", "timeout", "not_reproducible", "ambiguous_2xx",
             "unexpected_status", "invalid_rule", "invalid_canary", "execution_error",
-            "safety_blocked", "endpoint_absent", "invalid_control", "control_unusable"}
+            "safety_blocked", "endpoint_absent", "invalid_control", "control_unusable",
+            "mutation_blocked", "state_changed_by_other", "unverified_mutation",
+            "verify_unavailable", "restore_failed"}
 
 
 def result_properties(result):
@@ -13,7 +15,8 @@ def result_properties(result):
         properties["reason"] = result["reason"]
     for name, allowed in (("verdict", {"PASS", "FAIL", "ERROR", "INCONCLUSIVE", "SKIPPED"}),
                           ("confidence", {"high", "reduced"}),
-                          ("note", {"public_endpoint", "soft_deny", "caller_scoped", "shared_data", "control_unusable"})):
+                          ("note", {"public_endpoint", "soft_deny", "caller_scoped", "shared_data",
+                                    "control_unusable", "no_effect"})):
         if result.get(name) in allowed:
             properties[name] = result[name]
     if isinstance(result.get("spec_drift"), str) and result["spec_drift"]:
@@ -22,14 +25,21 @@ def result_properties(result):
     if not isinstance(raw, dict):
         return properties
     evidence = {}
-    for key in ("overlap_count", "confirm_runs", "pages_walked"):
+    for key in ("overlap_count", "confirm_runs", "pages_walked", "mutation_status", "probe_status"):
         if type(raw.get(key)) is int and raw[key] >= 0:
             evidence[key] = raw[key]
-    for key in ("canary_matched", "nonexistent_skipped", "control_unusable"):
+    for key in ("canary_matched", "nonexistent_skipped", "control_unusable",
+                "changed", "probe_matched", "restore_failed"):
         if type(raw.get(key)) is bool:
             evidence[key] = raw[key]
     if raw.get("scope") in {"object", "caller", "shared"}:
         evidence["scope"] = raw["scope"]
+    if raw.get("verification_mode") in {"marker", "probe", "state_diff"}:
+        evidence["verification_mode"] = raw["verification_mode"]
+    for key in ("marker_hash", "before_hash", "after_hash"):
+        value = raw.get(key)
+        if isinstance(value, str) and re.fullmatch(r"[a-f0-9]{64}", value):
+            evidence[key] = value
     controls = raw.get("control_statuses", {})
     if isinstance(controls, dict):
         evidence["control_statuses"] = {key: value for key, value in controls.items()

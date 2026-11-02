@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import copy
+import hashlib
+import ipaddress
+import json
 import math
 import re
 import secrets
@@ -16,11 +19,12 @@ import httpx
 import yaml
 
 from ..guardrails import UnsafeRequest
-from .verdict import _typed, _values, evaluate_differential, evaluate_scoped
+from .verdict import _typed, _values, evaluate_differential, evaluate_mutation, evaluate_scoped
 
 __all__ = ["load_rules", "run_rules"]
 
 _METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "TRACE"}
+_SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
 _SEVERITIES = {"info", "low", "medium", "high", "critical"}
 _TYPES = {"string", "number", "integer", "boolean", "object", "array", "null"}
 _MISSING = object()
@@ -81,7 +85,80 @@ def _path(value):
         raise ValueError("Endpoint paths must be absolute relative paths without traversal")
 
 
-def _validate_rules(rules):
+def _request_spec(value):
+    """Validate a restore/verify request without assuming an OpenAPI operation."""
+    _keys(value, {"method", "path", "auth", "body", "query"}, {"method", "path"})
+    if not isinstance(value["method"], str) or value["method"] not in _METHODS:
+        raise ValueError("Mutation request methods must be uppercase HTTP methods")
+    _path(value["path"])
+    auth = value.get("auth", "primary")
+    if not isinstance(auth, str) or not auth:
+        raise ValueError("Mutation request auth must be a nonempty string")
+    if "body" in value:
+        _json(value["body"])
+    query = value.get("query", {})
+    if not isinstance(query, dict) or not all(isinstance(key, str) and key for key in query):
+        raise ValueError("Mutation request query must be a string mapping")
+    _json(query)
+
+
+def _body_assertion(value):
+    _keys(value, {"path", "expected", "exists", "value_type"}, {"path"})
+    if not isinstance(value["path"], str):
+        raise ValueError("Verification body path must be a string")
+    if not set(value) & {"expected", "exists", "value_type"}:
+        raise ValueError("Verification body needs expected, exists or value_type")
+    if "exists" in value and type(value["exists"]) is not bool:
+        raise ValueError("Verification exists must be boolean")
+    if "value_type" in value and (not isinstance(value["value_type"], str)
+                                  or value["value_type"] not in _TYPES):
+        raise ValueError("Invalid verification body value_type")
+    if value.get("exists") is False and set(value) & {"expected", "value_type"}:
+        raise ValueError("Verification exists: false cannot check a value")
+    if "expected" in value:
+        _json(value["expected"])
+
+
+def _verify_spec(value):
+    _keys(value, {"mode", "readback", "request", "snapshot", "expected_status",
+                 "response_body", "fields"}, {"mode"})
+    mode = value["mode"]
+    if mode not in {"marker", "probe", "state_diff"}:
+        raise ValueError("verify.mode must be marker, probe or state_diff")
+    if mode == "marker":
+        if "readback" not in value:
+            raise ValueError("marker verification requires readback")
+        _request_spec(value["readback"])
+        extra = set(value) - {"mode", "readback"}
+        if extra:
+            raise ValueError("marker verification has unknown fields")
+    elif mode == "probe":
+        if "request" not in value or "expected_status" not in value:
+            raise ValueError("probe verification requires request and expected_status")
+        _request_spec(value["request"])
+        if type(value["expected_status"]) is not int or not 100 <= value["expected_status"] <= 599:
+            raise ValueError("probe expected_status must be 100..599")
+        if "response_body" in value:
+            _body_assertion(value["response_body"])
+        extra = set(value) - {"mode", "request", "expected_status", "response_body"}
+        if extra:
+            raise ValueError("probe verification has unknown fields")
+    else:
+        if "snapshot" not in value or "fields" not in value:
+            raise ValueError("state_diff verification requires snapshot and fields")
+        _request_spec(value["snapshot"])
+        fields = value["fields"]
+        if (not isinstance(fields, list) or not fields
+                or any(not isinstance(field, str) or not re.fullmatch(r"[A-Za-z0-9_.-]+", field)
+                       for field in fields)
+                or len(set(fields)) != len(fields)):
+            raise ValueError("state_diff fields must be unique JSON paths")
+        extra = set(value) - {"mode", "snapshot", "fields"}
+        if extra:
+            raise ValueError("state_diff verification has unknown fields")
+
+
+def _validate_rules(rules, *, require_mutating=True):
     if not isinstance(rules, list):
         raise ValueError("Rules must be a list")
     ids = set()
@@ -89,16 +166,20 @@ def _validate_rules(rules):
         _keys(rule, {"id", "name", "severity", "owasp_category", "cvss_score",
                      "target_endpoints", "auth_contexts", "assertions", "parameters", "body",
                      "acceptable_status", "leak_detection", "controls", "confirm", "pagination",
-                     "require_primary_canary", "scope", "require_owner_canary_in_baseline", "spec_check"},
+                     "require_primary_canary", "scope", "require_owner_canary_in_baseline", "spec_check",
+                     "mutating", "verify", "restore"},
               {"id", "name", "severity", "owasp_category", "cvss_score", "target_endpoints"})
         differential = "leak_detection" in rule
-        if not differential and set(rule) & {"acceptable_status", "controls", "confirm", "pagination",
+        mutating = rule.get("mutating", False)
+        if type(mutating) is not bool:
+            raise ValueError("mutating must be boolean")
+        if not differential and not mutating and set(rule) & {"acceptable_status", "controls", "confirm", "pagination",
                                             "require_primary_canary", "scope",
                                             "require_owner_canary_in_baseline"}:
             raise ValueError("Differential fields require leak_detection")
         if "spec_check" in rule and rule["spec_check"] not in {"strict", "warn"}:
             raise ValueError("spec_check must be strict or warn")
-        if not differential and "assertions" not in rule:
+        if not differential and not mutating and "assertions" not in rule:
             raise ValueError("Legacy rules require assertions")
         if differential and "assertions" in rule:
             raise ValueError("Differential rules must not mix assertions with leak_detection")
@@ -120,6 +201,28 @@ def _validate_rules(rules):
             _path(target["path"])
             if not isinstance(target["method"], str) or target["method"] not in _METHODS:
                 raise ValueError("Methods must be uppercase HTTP methods")
+        non_safe = any(target["method"] not in _SAFE_METHODS for target in targets)
+        if non_safe and not mutating and require_mutating:
+            raise ValueError("Non-safe methods require mutating: true")
+        if mutating and not non_safe:
+            raise ValueError("mutating: true requires a non-safe method")
+        if mutating:
+            if "assertions" in rule:
+                raise ValueError("Mutating rules must use verify, not assertions")
+            if "restore" not in rule:
+                raise ValueError("Mutating rules require restore")
+            if "verify" in rule:
+                _verify_spec(rule["verify"])
+            restore = rule["restore"]
+            if not isinstance(restore, list) or not restore:
+                raise ValueError("restore must be a nonempty list")
+            for request in restore:
+                if not isinstance(request, dict):
+                    raise ValueError("restore entries must be mappings")
+                _request_spec(request)
+            confirm = rule.get("confirm", 1)
+            if type(confirm) is not int or not 0 <= confirm <= 1:
+                raise ValueError("Mutating confirm must be 0 or 1")
         auth = rule.get("auth_contexts", {})
         _keys(auth, {"primary", "forbidden"})
         for name in auth.values():
@@ -136,7 +239,7 @@ def _validate_rules(rules):
         if "body" in rule:
             _json(rule["body"])
         assertions = rule.get("assertions", [])
-        if not differential and (not isinstance(assertions, list) or not assertions):
+        if not differential and not mutating and (not isinstance(assertions, list) or not assertions):
             raise ValueError("assertions must be a nonempty list")
         for assertion in assertions:
             if not isinstance(assertion, dict):
@@ -168,12 +271,13 @@ def _validate_rules(rules):
                 raise ValueError("Unknown assertion type")
             if "expected" in assertion:
                 _json(assertion["expected"])
-        if differential:
+        if differential or mutating:
             acceptable = rule.get("acceptable_status", [401, 403, 404])
             if (not isinstance(acceptable, list) or not acceptable
                     or any(type(status) is not int or not 400 <= status <= 499 or status == 429 for status in acceptable)
                     or len(set(acceptable)) != len(acceptable)):
                 raise ValueError("acceptable_status must be a unique nonempty list of HTTP status integers")
+        if differential:
             leak = rule["leak_detection"]
             _keys(leak, {"canaries", "min_unique_leaf_values", "ignore_fields"})
             canaries = leak.get("canaries", [])
@@ -217,6 +321,8 @@ def _validate_rules(rules):
                 raise ValueError("caller scope requires require_owner_canary_in_baseline: true")
             if scope == "caller" and not canaries:
                 raise ValueError("caller scope requires leak_detection.canaries")
+        if mutating and (set(auth) != {"primary", "forbidden"} or auth["primary"] == auth["forbidden"]):
+            raise ValueError("Mutating rules require distinct primary and forbidden contexts")
 
 
 def load_rules(paths: Iterable[str]) -> list[dict[str, Any]]:
@@ -239,7 +345,7 @@ def load_rules(paths: Iterable[str]) -> list[dict[str, Any]]:
         if not isinstance(document, list):
             raise ValueError("Rule file must contain a rule, a list, or a rules mapping")
         rules.extend(document)
-    _validate_rules(rules)
+    _validate_rules(rules, require_mutating=True)
     for rule in rules:
         rule["severity"] = rule["severity"].lower()
     return rules
@@ -378,6 +484,47 @@ class _Runtime:
             raise _Stop("HTTP request timed out.", "error", "timeout") from None
         except Exception:
             raise _Stop("HTTP request failed.", "error", "execution_error") from None
+
+    async def custom_request(self, spec, variables, primary=None, forbidden=None):
+        """Execute a validated restore/verify request without trusting the spec."""
+        role = spec.get("auth", "primary")
+        if role == "none":
+            context = None
+        elif role == "primary":
+            context = primary
+        elif role == "forbidden":
+            context = forbidden
+        elif role in self.contexts:
+            context = role
+        else:
+            raise _Stop("Unknown mutation request authentication context.", "error", "execution_error")
+
+        def substitute(match):
+            value = _lookup(variables, match[1])
+            if value is _MISSING or value is None or isinstance(value, (dict, list)):
+                raise _Stop("Unresolved mutation request path parameter.", "error", "execution_error")
+            return quote(str(value), safe="")
+
+        path = _TEMPLATE.sub(substitute, spec["path"])
+        if "{{" in path or "}}" in path:
+            raise _Stop("Malformed mutation request path parameter.", "error", "execution_error")
+        headers = {key.lower(): value for key, value in self.headers(context).items()}
+        headers.setdefault("cookie", "")
+        query = _expand(spec.get("query", {}), variables)
+        if not isinstance(query, dict):
+            raise _Stop("Mutation request query is invalid.", "error", "execution_error")
+        kwargs = {"params": query, "headers": headers, "follow_redirects": False, "auth": None}
+        if "body" in spec:
+            kwargs["json"] = _expand(spec["body"], variables)
+        url = self.inventory["base_url"].rstrip("/") + path
+        try:
+            return await self.client.request(spec["method"], url, **kwargs)
+        except UnsafeRequest:
+            raise _Stop("Mutation request blocked by the safety guard.", "skipped", "safety_blocked") from None
+        except httpx.TimeoutException:
+            raise _Stop("Mutation request timed out.", "inconclusive", "timeout") from None
+        except Exception:
+            raise _Stop("Mutation request failed.", "error", "execution_error") from None
 
     def remember(self, endpoint, response, context):
         if context is None or not 200 <= response.status_code < 300:
@@ -593,6 +740,192 @@ def _response_record(response):
     return result
 
 
+def _marker_present(response, marker: str) -> bool:
+    try:
+        payload = response.json()
+    except (ValueError, TypeError):
+        return marker in response.text
+
+    def visit(value):
+        if isinstance(value, dict):
+            return any(visit(child) for child in value.values())
+        if isinstance(value, list):
+            return any(visit(child) for child in value)
+        return isinstance(value, str) and marker in value
+
+    return visit(payload)
+
+
+def _state_hash(response, fields) -> str | None:
+    try:
+        payload = response.json()
+        _json(payload)
+    except (ValueError, TypeError, RecursionError):
+        return None
+    selected = []
+    for field in fields:
+        value = _lookup(payload, field)
+        if value is _MISSING:
+            return None
+        selected.append([field, value])
+    try:
+        canonical = json.dumps(selected, sort_keys=True, separators=(",", ":"),
+                               ensure_ascii=True, allow_nan=False)
+    except (TypeError, ValueError):
+        return None
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _mutation_host_allowed(url: str, allowed_hosts) -> bool:
+    parsed = urlsplit(url)
+    host = (parsed.hostname or "").rstrip(".").lower()
+    if not host:
+        return False
+    if host == "localhost" or host.endswith(".localhost"):
+        return True
+    try:
+        if ipaddress.ip_address(host).is_loopback:
+            return True
+    except ValueError:
+        pass
+    for entry in allowed_hosts:
+        candidate = entry.strip().rstrip(".").lower()
+        if candidate == host:
+            return True
+        try:
+            if urlsplit("//" + candidate).hostname == host:
+                return True
+        except ValueError:
+            continue
+    return False
+
+
+def _mutation_block_reason(allow_mutations: bool, allowed_hosts, read_only: bool,
+                           base_url: str) -> str | None:
+    missing = []
+    if read_only:
+        missing.append("--read-only is set")
+    if not allow_mutations:
+        missing.append("--allow-mutations is required")
+    if not _mutation_host_allowed(base_url, allowed_hosts):
+        host = (urlsplit(base_url).hostname or "unknown").lower()
+        missing.append(f"--allow-host {host} is required")
+    return "; ".join(missing) or None
+
+
+async def _verify_mutation(runtime, verify, variables, marker, primary, forbidden,
+                           before_hash=None):
+    mode = verify["mode"]
+    evidence = {"verification_mode": mode}
+    if mode == "marker":
+        evidence["marker_hash"] = hashlib.sha256(marker.encode("utf-8")).hexdigest()
+        try:
+            response = await runtime.custom_request(verify["readback"], variables, primary, forbidden)
+        except _Stop:
+            return {**evidence, "state": "unavailable"}
+        if response.status_code == 429 or 500 <= response.status_code < 600 or not 200 <= response.status_code < 300:
+            return {**evidence, "state": "unavailable"}
+        return {**evidence, "state": "changed" if _marker_present(response, marker) else "unchanged"}
+
+    if mode == "state_diff":
+        try:
+            response = await runtime.custom_request(verify["snapshot"], variables, primary, forbidden)
+        except _Stop:
+            return {**evidence, "state": "unavailable", "before_hash": before_hash}
+        after_hash = _state_hash(response, verify["fields"])
+        if (response.status_code == 429 or 500 <= response.status_code < 600
+                or not 200 <= response.status_code < 300 or before_hash is None or after_hash is None):
+            return {**evidence, "state": "unavailable", "before_hash": before_hash,
+                    "after_hash": after_hash}
+        return {**evidence, "state": "changed" if before_hash != after_hash else "unchanged",
+                "before_hash": before_hash, "after_hash": after_hash}
+
+    try:
+        response = await runtime.custom_request(verify["request"], variables, primary, forbidden)
+    except _Stop:
+        return {**evidence, "state": "unavailable"}
+    status = response.status_code
+    evidence["probe_status"] = status
+    if status == 429 or 500 <= status < 600:
+        return {**evidence, "state": "unavailable", "probe_matched": False}
+    matched = status == verify["expected_status"]
+    if matched and "response_body" in verify:
+        try:
+            response.json()
+        except (ValueError, TypeError):
+            return {**evidence, "state": "unavailable", "probe_matched": False}
+        assertion = {"type": "body", **verify["response_body"]}
+        matched = all(item["passed"] for item in _assertions(response, [assertion], variables))
+    evidence["probe_matched"] = bool(matched)
+    return {**evidence, "state": "changed" if matched else "unchanged"}
+
+
+async def _restore_mutation(runtime, rule, variables, primary, forbidden):
+    for request in rule["restore"]:
+        try:
+            response = await runtime.custom_request(request, variables, primary, forbidden)
+        except _Stop:
+            raise _Stop(f"State restoration failed for rule '{rule['id']}'.",
+                        "error", "restore_failed") from None
+        if not 200 <= response.status_code < 300:
+            raise _Stop(f"State restoration failed for rule '{rule['id']}'.",
+                        "error", "restore_failed")
+
+
+async def _execute_mutation(runtime, endpoint, inputs, forbidden, rule, variables, marker):
+    verify = rule.get("verify")
+    before_hash = None
+    if verify and verify["mode"] == "state_diff":
+        try:
+            before = await runtime.custom_request(verify["snapshot"], variables,
+                                                  rule["auth_contexts"]["primary"], forbidden)
+            before_hash = _state_hash(before, verify["fields"])
+        except _Stop:
+            before_hash = None
+        if before_hash is None:
+            return {"status": "inconclusive", "verdict": "INCONCLUSIVE",
+                    "message": "State snapshot was unavailable before the mutation.",
+                    "reason": "verify_unavailable", "confidence": "reduced",
+                    "evidence": {"verification_mode": "state_diff"}}
+
+    attempted = False
+    mutation = None
+    verification = None
+    error = None
+    try:
+        attempted = True
+        try:
+            response = await runtime.request(endpoint, inputs, forbidden, timeout_is_inconclusive=True)
+        except _Stop as exc:
+            if exc.reason == "timeout":
+                mutation = {"error": "timeout"}
+            else:
+                error = exc
+        if mutation is None and error is None:
+            mutation = _response_record(response)
+            if verify and 200 <= mutation.get("status", 0) < 300:
+                verification = await _verify_mutation(
+                    runtime, verify, variables, marker,
+                    rule["auth_contexts"]["primary"], forbidden, before_hash,
+                )
+    except _Stop as exc:
+        error = exc
+    finally:
+        restore_error = None
+        if attempted:
+            try:
+                await _restore_mutation(runtime, rule, variables,
+                                        rule["auth_contexts"]["primary"], forbidden)
+            except _Stop as exc:
+                restore_error = exc
+        if restore_error is not None:
+            raise restore_error
+    if error is not None:
+        raise error
+    return evaluate_mutation(mutation=mutation, verification=verification,
+                             acceptable_status=rule.get("acceptable_status", [401, 403, 404]))
+
+
 def _differential_config(rule, variables):
     leak = rule["leak_detection"]
     canaries = _expand(leak.get("canaries", []), variables)
@@ -773,15 +1106,23 @@ async def _differential_result(runtime, endpoint, inputs, forbidden, rule, basel
 
 async def run_rules(inventory: dict, rules: list[dict], client,
                     contexts: dict | None = None, variables: dict | None = None,
-                    spec_check: str = "strict") -> list[dict]:
+                    spec_check: str = "strict", allow_mutations: bool = False,
+                    allowed_hosts=(), read_only: bool = False) -> list[dict]:
     """Execute selected rules through an async guarded client; return redacted results.
 
     Invalid rules/context/variable configuration raises ValueError before any HTTP.
     Per-endpoint resolution, transport and baseline failures become result records.
     """
-    _validate_rules(rules)
+    _validate_rules(rules, require_mutating=False)
     if spec_check not in {"strict", "warn"}:
         raise ValueError("spec_check must be strict or warn")
+    if not isinstance(allow_mutations, bool):
+        raise ValueError("allow_mutations must be boolean")
+    if isinstance(allowed_hosts, str):
+        raise ValueError("allowed_hosts must be an iterable of host names")
+    allowed_hosts = tuple(allowed_hosts)
+    if any(not isinstance(host, str) or not host.strip() for host in allowed_hosts):
+        raise ValueError("allowed_hosts must contain nonempty strings")
     contexts = {} if contexts is None else contexts
     variables = {} if variables is None else variables
     if not isinstance(contexts, dict) or not isinstance(variables, dict):
@@ -837,6 +1178,26 @@ async def run_rules(inventory: dict, rules: list[dict], client,
                 runtime.headers(primary)
                 runtime.headers(forbidden)
                 op = endpoint.get("operation_id")
+                mutating = rule.get("mutating", False)
+                if mutating:
+                    if primary is None or forbidden is None:
+                        raise _Stop("Mutating rules require primary and forbidden contexts.",
+                                    "error", "invalid_rule")
+                    missing = _mutation_block_reason(allow_mutations, allowed_hosts, read_only,
+                                                     inventory["base_url"])
+                    if missing:
+                        raise _Stop(f"Mutation blocked: {missing}.", "skipped", "mutation_blocked")
+                    marker = secrets.token_urlsafe(24)
+                    original_variables = runtime.variables
+                    runtime.variables = {**original_variables, "marker": marker}
+                    try:
+                        inputs = await runtime.inputs(endpoint, rule, primary, (op,) if op else (), [0])
+                        result.update(await _execute_mutation(runtime, endpoint, inputs, forbidden,
+                                                              rule, runtime.variables, marker))
+                    finally:
+                        runtime.variables = original_variables
+                    results.append(result)
+                    continue
                 inputs = await runtime.inputs(endpoint, rule, primary, (op,) if op else (), [0])
                 pagination = rule.get("pagination")
                 if pagination:

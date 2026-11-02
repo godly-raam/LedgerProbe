@@ -107,6 +107,7 @@ def main() -> int:
             "other_email": other_email,
             "book_title": book_title,
             "canary_value": canary,
+            "original_password": password,
             "new_password": "LedgerProbe!43",
         },
     }
