@@ -26,6 +26,7 @@
     "/race/wallet": {"get": {"responses": {"200": {"description": "wallet"}}}},
     "/race/coupon": {"get": {"responses": {"200": {"description": "coupon"}}}},
     "/race/reset": {"post": {"responses": {"200": {"description": "reset"}}}},
+    "/race/restore": {"post": {"responses": {"200": {"description": "restore"}}}},
     "/race/health": {"get": {"responses": {"200": {"description": "health"}}}}
   }
 }

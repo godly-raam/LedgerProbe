@@ -5,6 +5,7 @@ import argparse
 import asyncio
 import json
 import math
+import os
 import sys
 from collections import Counter
 from pathlib import Path
@@ -13,9 +14,13 @@ from urllib.parse import quote, urlsplit
 import httpx
 
 from pkg.guardrails import GuardedClient
+from pkg.integrations import TrackerError, load_integrations, process_tickets
 from pkg.parser import load_inventory
 from pkg.reporter import notify, write_junit, write_sarif
 from pkg.rules import load_rules, run_rules
+from pkg.results import (apply_baseline, baseline_document, build_document,
+                         diff_documents, gate_exit, load_document, write_document)
+from pkg.suppressions import apply_suppressions, load_suppressions
 
 
 def positive_float(value: str) -> float:
@@ -50,7 +55,21 @@ def arguments(argv=None) -> argparse.Namespace:
     parser.add_argument("--inputs", type=Path, help="JSON file containing contexts and variables")
     parser.add_argument("--sarif", type=Path, default=Path("results.sarif"))
     parser.add_argument("--junit", type=Path, help="optional JUnit XML output")
+    parser.add_argument("--json", type=Path, help="optional versioned JSON results output")
+    parser.add_argument("--suppressions", type=Path, help="suppression YAML (default: .ledgerprobe-suppressions.yaml when present)")
+    parser.add_argument("--fail-on-stale", action="store_true",
+                        help="return exit 1 when a suppression fingerprint was not produced")
+    parser.add_argument("--max-suppression-days", type=positive_int, default=180)
+    parser.add_argument("--baseline", type=Path, help="previous versioned results JSON for CI gating")
+    parser.add_argument("--fail-on", choices=("new", "any", "none"), default="any",
+                        help="finding failure policy, optionally relative to --baseline")
     parser.add_argument("--webhooks", type=Path, help="JSON array of webhook configurations (may contain secrets)")
+    parser.add_argument("--integrations", type=Path,
+                        help="strict tracker/Slack integrations YAML")
+    parser.add_argument("--tickets", choices=("dry-run", "apply", "off"), default="dry-run",
+                        help="tracker lifecycle mode; apply is required for network calls")
+    parser.add_argument("--fail-on-tracker-error", action="store_true",
+                        help="return exit 3 when tracker or Slack delivery fails")
     parser.add_argument("--max-rps", type=positive_float, default=10.0)
     parser.add_argument("--concurrency", type=positive_int, default=4)
     parser.add_argument("--timeout", type=positive_float, default=15.0)
@@ -115,36 +134,107 @@ async def execute(args: argparse.Namespace) -> int:
                                   allow_mutations=args.allow_mutations,
                                   allowed_hosts=args.allow_host, read_only=args.read_only,
                                   **inputs)
+    warnings = []
+    suppression_stats = None
+    suppressions_path = args.suppressions
+    if suppressions_path is None and Path(".ledgerprobe-suppressions.yaml").exists():
+        suppressions_path = Path(".ledgerprobe-suppressions.yaml")
+    if suppressions_path is not None:
+        entries = load_suppressions(suppressions_path, max_days=args.max_suppression_days)
+        results, suppression_stats, suppression_warnings = apply_suppressions(results, entries)
+        warnings.extend(suppression_warnings)
+    baseline_stats = None
+    if args.baseline:
+        results, baseline_stats = apply_baseline(results, baseline_document(args.baseline))
     source_uri = None
     if urlsplit(args.spec).scheme not in {"http", "https"}:
         try:
             source_uri = quote(Path(args.spec).resolve().relative_to(Path(__file__).parent).as_posix(), safe="/")
         except ValueError:
             pass  # External specs have endpoint-only SARIF locations.
-    write_sarif(results, args.sarif, source_uri=source_uri)
+    report_results = results
+    if baseline_stats is not None:
+        report_results = [result for result in results
+                          if result.get("baseline_status") in {"new", "unchanged"}]
+    write_sarif(report_results, args.sarif, source_uri=source_uri, warnings=warnings)
     if args.junit:
-        write_junit(results, args.junit)
+        write_junit(report_results, args.junit, warnings=warnings)
+    if args.json:
+        document = build_document(results, target=inventory["base_url"],
+                                  modes={"read_only": args.read_only,
+                                         "allow_mutations": args.allow_mutations,
+                                         "spec_check": args.spec_check},
+                                  warnings=warnings, baseline=baseline_stats,
+                                  suppressions=suppression_stats)
+        write_document(document, args.json)
     counts = Counter(result["status"] for result in results)
     for result in results:
         if result.get("spec_drift"):
             print(f"[!] spec_drift: {result['spec_drift']} is absent from the spec; executed because --spec-check warn")
         print(f"[{result['status']}] {result['rule_id']} {result['method']} {result['path']}: {result['message']}")
+    if baseline_stats is not None:
+        print(f"[+] baseline: new={baseline_stats['new']} unchanged={baseline_stats['unchanged']} "
+              f"resolved={baseline_stats['resolved']}")
+    for warning in warnings:
+        if warning.get("code") == "suppression_expired":
+            print(f"[!] suppression_expired: owner={warning.get('owner')} expires={warning.get('expires')}")
+        elif warning.get("code") == "stale_suppression":
+            print(f"[!] stale_suppression: {warning.get('fingerprint')}")
     print(f"[+] SARIF: {args.sarif}; {dict(counts)}")
     if webhooks:
         # Outbound notifications are explicitly opted-in writes, not target mutations.
         async with GuardedClient(max_rps=args.max_rps, concurrency=1, timeout=args.timeout) as client:
             await notify(results, webhooks, client)
+    tracker_failed = False
+    if args.tickets != "off":
+        integrations_path = args.integrations or Path("ledgerprobe-integrations.yaml")
+        if integrations_path.exists():
+            config = load_integrations(integrations_path)
+            try:
+                ticket_run = await process_tickets(
+                    results, config=config, target=inventory["base_url"], mode=args.tickets,
+                    ci_url=os.environ.get("CI_RUN_URL"),
+                )
+            except TrackerError as exc:
+                ticket_run = None
+                tracker_failed = True
+                print(f"[!] tracker_error: {exc}", file=sys.stderr)
+            if ticket_run is None:
+                pass
+            else:
+                tracker_failed = bool(ticket_run.errors)
+                for warning in ticket_run.warnings:
+                    print(f"[!] tickets: {warning}")
+                for error in ticket_run.errors:
+                    print(f"[!] tracker_error: {error}", file=sys.stderr)
+        elif args.integrations:
+            raise ValueError("integrations configuration does not exist")
     # Errors mean the scan could not be trusted. Inconclusive checks completed
     # safely but do not establish an authorization verdict unless opted into CI failure.
-    if counts["error"] or not counts["passed"] + counts["failed"] + counts["inconclusive"]:
-        return 2
-    if counts["failed"] or (args.fail_on_inconclusive and counts["inconclusive"]):
-        return 1
-    return 0
+    exit_code = gate_exit(results, fail_on=args.fail_on,
+                          fail_on_inconclusive=args.fail_on_inconclusive,
+                          fail_on_stale=args.fail_on_stale,
+                          stale=(suppression_stats or {}).get("stale", 0))
+    if tracker_failed and args.fail_on_tracker_error and exit_code != 2:
+        return 3
+    return exit_code
 
 
 def main(argv=None) -> int:
-    args = arguments(argv)
+    values = list(sys.argv[1:] if argv is None else argv)
+    if values[:1] == ["diff"]:
+        parser = argparse.ArgumentParser(description="Compare two LedgerProbe results JSON files")
+        parser.add_argument("old")
+        parser.add_argument("new")
+        try:
+            parsed = parser.parse_args(values[1:])
+            print(json.dumps(diff_documents(load_document(parsed.old), load_document(parsed.new)),
+                             indent=2, sort_keys=True))
+            return 0
+        except (ValueError, OSError):
+            print("error: results diff failed (schema mismatch or unreadable input)", file=sys.stderr)
+            return 2
+    args = arguments(values)
     try:
         return asyncio.run(execute(args))
     except (ValueError, OSError, ImportError, httpx.HTTPError) as exc:

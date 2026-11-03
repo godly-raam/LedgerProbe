@@ -62,9 +62,40 @@ Required metadata: `id`, `name`, `severity`, `owasp_category`, `cvss_score`.
 IDs/names/categories are nonempty strings. Severity is one of `info`, `low`,
 `medium`, `high`, `critical`; score is a finite JSON number in `[0, 10]`, not a
 boolean. Severity is case-insensitive and normalized to lowercase in results.
-`target_endpoints` and `assertions` are nonempty lists. Methods are
-uppercase HTTP methods. Paths/methods match inventory entries exactly; there
+`target_endpoints` and `assertions` are nonempty lists. Optional `remediation`
+is a nonempty string copied into tracker ticket bodies only; it is never sent
+to the target. Methods are uppercase HTTP methods. Paths/methods match inventory entries exactly; there
 are no wildcards or automatic discovery attacks.
+
+### CVSS 3.1 scoring
+
+`cvss_score` is retained as a deprecated compatibility field; it is not used to
+choose exit codes or the headline result. New results carry a computed `cvss`
+object (`vector`, `score`, `rating`). A rule may override the default with a
+justification:
+
+```yaml
+cvss:
+  vector: CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H
+  justification: Internet-facing, pre-auth object destruction.
+```
+
+The vector must be a complete CVSS 3.1 base vector; malformed, duplicate,
+missing, or non-3.1 vectors are rejected. Defaults are deliberately scoped to
+the check's exploit model:
+
+| `check_type` | Default vector | Rationale |
+| --- | --- | --- |
+| `bola` | `CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:N` | Authenticated cross-object read/write. |
+| `state_change` | same as `bola` | Authenticated mutation of another principal's state. |
+| `race` | `CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:N/I:H/A:H` | Integrity/availability loss after a concurrent business-flow check. |
+| `caller_scope` | `CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:L/I:N/A:N` | Caller-scoped response with limited disclosure. |
+| `shared_scope` | same as `caller_scope` | Shared catalogue response with limited disclosure. |
+| `unauthenticated_access` | `CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N` | No privileges required; high confidentiality impact. |
+
+Reduced-confidence findings retain their CVSS score and carry `confidence`
+separately. `cvss_score` should be treated as the old compatibility grade, not
+as the authoritative score.
 
 Optional `parameters` is a location mapping (`path`, `query`, `header`), each
 containing name-to-JSON-value pairs. Optional `body` is an explicit JSON value:
@@ -169,6 +200,9 @@ One result is returned per rule target, in input order:
 {"rule_id": "account-ownership", "name": "...", "severity": "high",
  "owasp_category": "API1:2023", "cvss_score": 8.1,
  "path": "/accounts/{account_id}", "method": "GET",
+ "fingerprint": "lp1:...", "path_template": "/accounts/{account_id}",
+ "check_type": "bola", "identity_roles": ["other_user", "parent_user_a"],
+ "cvss": {"vector": "CVSS:3.1/...", "score": 8.1, "rating": "high"},
  "status": "passed", "message": "All assertions passed.",
  "assertions": [{"index": 0, "type": "status_code", "passed": True}]}
 ```
@@ -363,6 +397,11 @@ The block supports bounded `requests` (default 10, max 50), `rounds` (default 5,
 max 20), `sync` (`last_byte`, `burst`, or optional `h2_single_packet`),
 `identity`, required `reset:`, `success_status`, optional `idempotency`, and a
 required `invariant` with `max_successes` and/or a signed `ledger` check.
+
+`h2_single_packet` is **experimental and unverified against a real HTTP/2
+server**. It requires the optional `h2` package and ALPN `h2`; when unavailable
+it falls back to `last_byte` with `h2_unavailable`, and that fallback must not
+be reported as an h2 result. The h2 coalescing limit is 1200 bytes.
 
 Every reset, snapshot, race request, and restore request uses the same
 `GuardedClient`; `GuardedClient.send_synchronized()` applies the read-only path

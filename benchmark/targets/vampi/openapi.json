@@ -277,7 +277,7 @@
                   "properties": {
                     "auth_token": {
                       "type": "string",
-                      "example": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJleHAiOjE2NzAxNjA2MTcsImlhdCI6MTY3MDE2MDU1Nywic3ViIjoiSm9obi5Eb2UifQ.n17N4AxTbL4_z65-NR46meoytauPDjImUxrLiUMSTQw"
+                      "example": "redacted-for-secret-scanning"
                     },
                     "message": {
                       "type": "string",

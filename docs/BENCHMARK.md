@@ -110,7 +110,9 @@ also copied to `benchmark/results_v1.md`.
    adapter, never in the engine. Inputs are written under
    `benchmark/.out/<target>/<instance>/inputs.json` with mode `0600` and are
    gitignored. VAmPI setup also records `original_password` for the mutation
-   restore path.
+   restore path. Each target run removes generated `inputs.json` token files
+   after scoring; use `--keep-out` only when you intentionally need to inspect
+   them locally.
 2. Modes run through the same OpenAPI snapshot, base URLs, inputs and rate limit:
    - **legacy_strict**: the engine's exact `403` status assertion. This is the
      naive baseline: it has no canary, control, confirmation or soft-deny logic.

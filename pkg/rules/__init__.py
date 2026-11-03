@@ -19,6 +19,8 @@ import httpx
 import yaml
 
 from ..guardrails import UnsafeRequest
+from ..cvss import parse_vector, resolve_cvss
+from ..fingerprints import check_type, fingerprint, identity_roles
 from .verdict import _typed, _values, evaluate_differential, evaluate_mutation, evaluate_race, evaluate_scoped
 
 __all__ = ["load_rules", "run_rules"]
@@ -228,12 +230,14 @@ def _validate_rules(rules, *, require_mutating=True):
         raise ValueError("Rules must be a list")
     ids = set()
     for rule in rules:
-        _keys(rule, {"id", "name", "severity", "owasp_category", "cvss_score",
+        _keys(rule, {"id", "name", "severity", "owasp_category", "cvss_score", "cvss",
                      "target_endpoints", "auth_contexts", "assertions", "parameters", "body",
                      "acceptable_status", "leak_detection", "controls", "confirm", "pagination",
                      "require_primary_canary", "scope", "require_owner_canary_in_baseline", "spec_check",
-                     "mutating", "verify", "restore", "race"},
+                     "mutating", "verify", "restore", "race", "remediation"},
               {"id", "name", "severity", "owasp_category", "cvss_score", "target_endpoints"})
+        if "remediation" in rule:
+            _text(rule["remediation"])
         differential = "leak_detection" in rule
         mutating = rule.get("mutating", False)
         if type(mutating) is not bool:
@@ -258,6 +262,13 @@ def _validate_rules(rules, *, require_mutating=True):
         score = rule["cvss_score"]
         if type(score) not in (int, float) or not 0 <= score <= 10:
             raise ValueError("CVSS score must be a number between 0 and 10")
+        if "cvss" in rule:
+            override = rule["cvss"]
+            _keys(override, {"vector", "justification"}, {"vector", "justification"})
+            if not isinstance(override["vector"], str):
+                raise ValueError("cvss.vector must be a string")
+            parse_vector(override["vector"])
+            _text(override["justification"])
         targets = rule["target_endpoints"]
         if not isinstance(targets, list) or not targets:
             raise ValueError("target_endpoints must be a nonempty list")
@@ -1349,9 +1360,19 @@ async def run_rules(inventory: dict, rules: list[dict], client,
     results = []
     for rule in rules:
         for target in rule["target_endpoints"]:
+            selected_type = check_type(rule)
+            roles = identity_roles(rule)
             result = {key: rule[key] for key in ("name", "severity", "owasp_category", "cvss_score")}
             result.update(rule_id=rule["id"], severity=rule["severity"].lower(),
-                          path=target["path"], method=target["method"])
+                          path=target["path"], method=target["method"],
+                          path_template=target["path"], check_type=selected_type,
+                          identity_roles=roles, cvss=resolve_cvss(rule, selected_type),
+                          fingerprint=fingerprint(rule_id=rule["id"], method=target["method"],
+                                                  path_template=target["path"],
+                                                  identity_roles=roles,
+                                                  check_type=selected_type))
+            if "remediation" in rule:
+                result["remediation"] = rule["remediation"]
             try:
                 effective_spec_check = rule.get("spec_check", spec_check)
                 if effective_spec_check not in {"strict", "warn"}:

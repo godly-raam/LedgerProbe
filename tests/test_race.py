@@ -95,10 +95,26 @@ def test_race_corpus(profile: str, spec: dict, tmp_path: Path):
         assert exit_code == 1
     elif spec["expected_verdict"] == "INCONCLUSIVE":
         assert exit_code == 0
+    elif spec["expected_verdict"] == "ERROR":
+        assert exit_code == 2
     elif spec["expected_verdict"] == "SKIPPED":
         assert exit_code == 2
     text = (tmp_path / "results.sarif").read_text() + (tmp_path / "results.xml").read_text()
     for secret in ("balance", "100", "token-owner", "token-other", "Idempotency-Key"):
+        assert secret not in text
+
+
+def test_race_restore_failure_is_error_and_names_rule(tmp_path: Path):
+    process, port = _start("restore_failure")
+    try:
+        result = asyncio.run(_run_direct(port, "rules_race_restore_failure.yaml", tmp_path))
+    finally:
+        process.terminate()
+        process.wait(timeout=3)
+    assert (result["verdict"], result.get("reason")) == ("ERROR", "restore_failed")
+    text = (tmp_path / "results.sarif").read_text() + (tmp_path / "results.xml").read_text()
+    assert "authz-race-wallet-restore" in text
+    for secret in ("balance", "100", "token-owner", "token-other", "race-canary"):
         assert secret not in text
 
 

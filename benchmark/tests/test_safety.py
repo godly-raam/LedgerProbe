@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from benchmark.run import UnsafeTarget, _score, validate_target_url
+from benchmark.run import UnsafeTarget, _score, cleanup_generated_inputs, validate_target_url
 
 
 @pytest.mark.parametrize("url", [
@@ -75,3 +75,15 @@ def test_scorer_never_counts_inconclusive_as_correct():
     assert summary["precision"] == 1.0
     assert summary["recall"] == pytest.approx(1 / 3)
     assert summary["recall_excl_inconclusive"] == 0.5
+
+
+def test_benchmark_inputs_are_removed_but_other_outputs_remain(tmp_path):
+    token = tmp_path / "vampi" / "vulnerable" / "inputs.json"
+    token.parent.mkdir(parents=True)
+    token.write_text('{"contexts": {"owner": {"Authorization": "secret"}}}')
+    report = token.parent / "results.xml"
+    report.write_text("<testsuite />")
+    assert cleanup_generated_inputs(tmp_path, "vampi") == 1
+    assert not token.exists()
+    assert report.exists()
+    assert cleanup_generated_inputs(tmp_path, "missing") == 0

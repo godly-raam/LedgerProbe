@@ -1,0 +1,3 @@
+# Suppression approval is a pull-request review by the security owner.
+/.ledgerprobe-suppressions.yaml @godly-raam
+/rulesets/ @godly-raam

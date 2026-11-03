@@ -17,6 +17,15 @@ wallet_race_safe:
   extra_args: ["--allow-mutations"]
   description: "Atomic wallet debit accepts one request and one debit"
 
+wallet_race_vulnerable_narrow:
+  category: vulnerable
+  expected_verdict: FAIL
+  expected_reason: race_invariant_violated
+  expected_note: null
+  rule_file: rules_race_wallet.yaml
+  extra_args: ["--allow-mutations"]
+  description: "Check-then-act wallet debit with only a yield between check and debit"
+
 coupon_single_use_vulnerable:
   category: vulnerable
   expected_verdict: FAIL
@@ -88,3 +97,12 @@ race_mutation_blocked:
   rule_file: rules_race_wallet.yaml
   extra_args: []
   description: "Race check without --allow-mutations"
+
+restore_failure:
+  category: tricky
+  expected_verdict: ERROR
+  expected_reason: restore_failed
+  expected_note: null
+  rule_file: rules_race_restore_failure.yaml
+  extra_args: ["--allow-mutations"]
+  description: "The race restore endpoint returns 500 after the raced requests"

@@ -48,7 +48,7 @@ ledger bounds total effect. `mode: none` is the default.
 | --- | --- | --- |
 | `last_byte` | One fresh HTTP/1.1 connection per request (TLS when needed); sends each request minus its final byte, waits on a barrier, writes all final bytes in one tight pass, then reads status lines. | Default. Measures release spread; no response bodies enter evidence. |
 | `burst` | Existing concurrent request behavior after a barrier. | Legacy behavior; PASS carries note `weak_sync_mode` because release is scheduler-dependent. |
-| `h2_single_packet` | Optional HTTP/2 mode: N streams on one connection, final empty DATA frame withheld, all final frames written together. | Requires the optional `h2` package (`pip install -r requirements-race.txt`) and ALPN `h2`. Falls back to `last_byte` with note `h2_unavailable` when unavailable. Coalescing limit is 1200 bytes; above it the run falls back with note `h2_coalesce_limit`. |
+| `h2_single_packet` | Optional HTTP/2 mode: N streams on one connection, final empty DATA frame withheld, all final frames written together. | **Experimental, unverified against a real HTTP/2 server.** Requires the optional `h2` package (`pip install -r requirements-race.txt`) and ALPN `h2`. Falls back to `last_byte` with note `h2_unavailable` when unavailable. Coalescing limit is 1200 bytes; above it the run falls back with note `h2_coalesce_limit`. The fallback must not be reported as an h2 measurement. |
 
 `last_byte` is HTTP/1.1 only. The h2 fallback is deliberate: a missing optional
 dependency or a server that does not negotiate HTTP/2 must not turn a race check
@@ -118,6 +118,7 @@ tests at anything except that local fixture.
 | Profile | Expected | Actual |
 | --- | --- | --- |
 | `wallet_race_vulnerable` | FAIL `race_invariant_violated` | FAIL `race_invariant_violated` |
+| `wallet_race_vulnerable_narrow` | FAIL `race_invariant_violated` | FAIL `race_invariant_violated` |
 | `wallet_race_safe` | PASS `no_violation_observed` | PASS `no_violation_observed` |
 | `coupon_single_use_vulnerable` | FAIL `race_invariant_violated` | FAIL `race_invariant_violated` |
 | `coupon_single_use_safe` | PASS `no_violation_observed` | PASS `no_violation_observed` |
@@ -127,6 +128,7 @@ tests at anything except that local fixture.
 | `rate_limit_429_during_race` | INCONCLUSIVE `rate_limited` | INCONCLUSIVE `rate_limited` |
 | `reset_failure` | INCONCLUSIVE `reset_failed` | INCONCLUSIVE `reset_failed` |
 | `race_mutation_blocked` | SKIPPED `mutation_blocked` | SKIPPED `mutation_blocked` |
+| `restore_failure` | ERROR `restore_failed` | ERROR `restore_failed` |
 
 Reports contain counts, hashes, status counts, medians, and booleans only. They
 do not contain object IDs, market/account values, tokens, idempotency keys, or
@@ -135,27 +137,32 @@ report for the fixture's balance value and identity tokens.
 
 ## Detection study
 
-Twenty fresh runs per mode against `wallet_race_vulnerable`, with 10 requests
-and 5 rounds per run (on the local loopback fixture):
+Twenty fresh runs per mode against each wallet fixture, with 10 requests and 5
+rounds per run (on the local loopback fixture). The wide fixture has a 30 ms
+check/write gap; the narrow fixture yields once with `await asyncio.sleep(0)`:
 
-| Mode | FAIL runs | FAIL rate | Median spread (ms) | Rounds to first hit |
-| --- | ---: | ---: | ---: | --- |
-| `burst` | 20/20 | 100% | 2.326938 | 1 |
-| `last_byte` | 20/20 | 100% | 0.109421 | 1 |
-| `h2_single_packet` | 20/20 | 100% | 0.094899 | 1 |
+| Fixture | Mode | FAIL runs | FAIL rate | Median spread (ms) | Rounds to first hit |
+| --- | --- | ---: | ---: | ---: | --- |
+| wide (30 ms) | `burst` | 20/20 | 100% | 4.364330 | 1 |
+| wide (30 ms) | `last_byte` | 20/20 | 100% | 0.158460 | 1 |
+| narrow (yield) | `burst` | 0/20 | 0% | 4.181949 | none |
+| narrow (yield) | `last_byte` | 20/20 | 100% | 0.176219 | 1 |
+| n/a | `h2_single_packet` | not tested (h2 unavailable) | n/a | n/a | n/a |
 
-The h2 row is **not an h2 measurement**: the optional `h2` package was not
-installed, so all 20 runs fell back to `last_byte` with note `h2_unavailable`.
-The fallback spread is therefore a last-byte spread, not a single-packet HTTP/2
-spread.
+The h2 row is **not an h2 measurement**. The optional `h2` package was not
+installed, so no h2 runs were performed; the table intentionally does not repeat
+last-byte numbers as though they were h2 numbers. Hypercorn was not installed,
+so no real HTTP/2 fixture was attempted. The mode remains experimental and
+unverified against a real HTTP/2 server.
 
-On this fixture, `last_byte` did **not** beat `burst` on detection rate; both
-were 20/20 with a first hit in round 1. `last_byte` did produce a much smaller
-release spread (about 0.11 ms versus 2.33 ms), which is the point of the
-synchronized mode, but the fixture's 30 ms check/write gap is large enough that
-the legacy burst already wins reliably. A target with a narrower race window
-may behave differently; that is exactly why the strong-round threshold and
-`weak_synchronization` outcome exist.
+The honest result changes with the window. On the wide fixture, `burst` and
+`last_byte` both detected the bug 20/20; `last_byte` reduced median release
+spread from about 4.36 ms to 0.16 ms, but the 30 ms gap gave burst enough time to
+win anyway. On the narrow fixture, `burst` detected **0/20** while `last_byte`
+detected **20/20**, with first hits in rounds 1-4. Release spread alone is not a
+detection guarantee, but this is the evidence that the synchronized mode is
+needed for a small check/write window. These are local fixture results, not a
+general detection-rate estimate.
 
 ## Safe use
 

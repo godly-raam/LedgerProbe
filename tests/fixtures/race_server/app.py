@@ -14,6 +14,7 @@ class RaceState:
         self.profile = profile
         self.lock = asyncio.Lock()
         self.reset_attempts = 0
+        self.restore_attempts = 0
         self._fresh()
 
     def _fresh(self):
@@ -47,6 +48,15 @@ async def reset(request: Request):
     return JSONResponse({"ok": True})
 
 
+async def restore(request: Request):
+    app_state = state(request)
+    app_state.restore_attempts += 1
+    if profile(request) == "restore_failure":
+        return JSONResponse({"error": "restore failed"}, status_code=500)
+    app_state.reset()
+    return JSONResponse({"ok": True})
+
+
 async def wallet(request: Request):
     app_state = state(request)
     return JSONResponse({"balance": app_state.balance, "ledger": app_state.ledger})
@@ -75,9 +85,9 @@ async def wallet_spend(request: Request):
     amount = await _amount(request)
     if not amount:
         return JSONResponse({"error": "bad amount"}, status_code=400)
-    if profile(request) == "wallet_race_vulnerable":
+    if profile(request) in {"wallet_race_vulnerable", "wallet_race_vulnerable_narrow"}:
         if app_state.balance >= amount:
-            await asyncio.sleep(0.03)
+            await asyncio.sleep(0.03 if profile(request) == "wallet_race_vulnerable" else 0)
             app_state.balance -= amount
             app_state.ledger += amount
             return JSONResponse({"accepted": True}, status_code=200)
@@ -128,6 +138,7 @@ state.profile = None
 app = Starlette(routes=[
     Route("/race/health", health, methods=["GET"]),
     Route("/race/reset", reset, methods=["POST"]),
+    Route("/race/restore", restore, methods=["POST"]),
     Route("/race/wallet", wallet, methods=["GET"]),
     Route("/race/coupon", coupon_state, methods=["GET"]),
     Route("/race/wallet/spend", wallet_spend, methods=["POST"]),

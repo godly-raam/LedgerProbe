@@ -584,7 +584,21 @@ def _scan_mode(target: Target, mode: str, out: Path, base_urls: dict[str, str],
     return combined
 
 
+def cleanup_generated_inputs(out: Path, target_name: str | None = None) -> int:
+    """Remove setup token files; reports and other benchmark output remain."""
+    root = out / target_name if target_name else out
+    removed = 0
+    if not root.exists():
+        return removed
+    for path in root.rglob("inputs.json"):
+        if path.is_file():
+            path.unlink(missing_ok=True)
+            removed += 1
+    return removed
+
+
 def run_target(target: Target, out: Path, *, no_docker: bool, keep: bool,
+               keep_out: bool = False,
                base_urls: dict[str, str], repeats: int = 3,
                modes: Iterable[str] = MODES) -> dict[str, Any]:
     document, cases = _load_cases(target.ground_truth)
@@ -622,6 +636,8 @@ def run_target(target: Target, out: Path, *, no_docker: bool, keep: bool,
     finally:
         if not no_docker and not keep:
             compose_down(target)
+        if not keep_out:
+            cleanup_generated_inputs(out, target.name)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -631,6 +647,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--no-docker", action="store_true",
                         help="use already-running loopback targets instead of compose")
     parser.add_argument("--keep", action="store_true", help="leave compose services running")
+    parser.add_argument("--keep-out", action="store_true",
+                        help="retain generated benchmark/.out inputs.json token files")
     parser.add_argument("--merge", action="store_true",
                         help="update selected targets in an existing results.json")
     parser.add_argument("--repeats", type=int, default=1,
@@ -672,6 +690,7 @@ def main(argv: list[str] | None = None) -> int:
             continue
         print(f"[*] target {name}: {', '.join(target.instances)}; {args.repeats} run(s)/mode")
         result = run_target(target, out, no_docker=args.no_docker, keep=args.keep,
+                            keep_out=args.keep_out,
                             base_urls=base_urls, repeats=args.repeats, modes=args.modes)
         if args.merge and result.get("status") == "ok":
             previous = document.get("targets", {}).get(name, {})

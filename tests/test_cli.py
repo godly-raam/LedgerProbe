@@ -2,13 +2,17 @@ import asyncio
 import json
 from pathlib import Path
 from unittest.mock import patch
+from unittest.mock import AsyncMock
 from xml.etree import ElementTree as ET
 
 import httpx
 import pytest
+import jsonschema
 
 import ledgerprobe
 from pkg.guardrails import GuardedClient
+from pkg.fingerprints import fingerprint
+from pkg.integrations import TicketRun
 
 
 SPEC = {
@@ -149,3 +153,89 @@ def test_errors_keep_exit_two_even_with_fail_on_inconclusive(tmp_path):
     selected["leak_detection"] = {}
     assert scan(tmp_path, lambda request: httpx.Response(500), rule=selected,
                 extra=("--fail-on-inconclusive",))[0] == 2
+
+
+def test_suppression_is_reported_and_excluded_from_exit(tmp_path):
+    fp = fingerprint(rule_id=RULE["id"], method="GET", path_template="/objects/{id}",
+                     identity_roles=["other", "owner"], check_type="bola")
+    suppressions = tmp_path / "suppressions.yaml"
+    suppressions.write_text(
+        "- fingerprint: " + fp + "\n"
+        "  reason: Accepted temporary test exception\n"
+        "  owner: security-team\n"
+        "  created: 2026-11-01\n"
+        "  expires: 2026-12-01\n"
+        "  ticket: SEC-1\n"
+        "  approved_by: security-lead\n"
+    )
+    code, sarif, junit = scan(
+        tmp_path, lambda request: httpx.Response(200, json={"id": "object-1"}),
+        extra=("--suppressions", str(suppressions), "--json", str(tmp_path / "results.json")),
+    )
+    assert code == 0
+    finding = sarif["runs"][0]["results"][0]
+    assert finding["suppressions"][0]["kind"] == "external"
+    assert junit.getroot().get("skipped") == "1"
+    document = json.loads((tmp_path / "results.json").read_text())
+    assert document["findings"][0]["status"] == "suppressed"
+    assert document["findings"][0]["suppression"]["owner"] == "security-team"
+    schema = json.loads((Path(__file__).parents[1] / "schemas" / "results.schema.json").read_text())
+    jsonschema.Draft202012Validator(schema).validate(document)
+
+
+def test_baseline_new_vs_unchanged_exit_and_diff(tmp_path, capsys):
+    fp = fingerprint(rule_id=RULE["id"], method="GET", path_template="/objects/{id}",
+                     identity_roles=["other", "owner"], check_type="bola")
+    baseline = tmp_path / "baseline.json"
+    baseline.write_text(json.dumps({"schema_version": "ledgerprobe-results/1",
+                                    "findings": [{"fingerprint": fp, "rule_id": RULE["id"]}]}))
+    handler = lambda request: httpx.Response(200, json={"id": "object-1"})
+    assert scan(tmp_path, handler, extra=("--baseline", str(baseline), "--fail-on", "new"))[0] == 0
+    empty = tmp_path / "empty.json"
+    empty.write_text(json.dumps({"schema_version": "ledgerprobe-results/1", "findings": []}))
+    assert scan(tmp_path, handler, extra=("--baseline", str(empty), "--fail-on", "new"))[0] == 1
+    assert ledgerprobe.main(["diff", str(empty), str(baseline)]) == 0
+    output = capsys.readouterr().out
+    assert fp in output and RULE["id"] in output
+
+
+def test_malformed_suppression_is_exit_two(tmp_path):
+    for name, data in [("spec.json", SPEC), ("rules.json", RULE), ("inputs.json", {
+        "contexts": {"owner": {"Authorization": "owner-secret"},
+                     "other": {"Authorization": "other-secret"}},
+        "variables": {"id": "object-1"},
+    })]:
+        (tmp_path / name).write_text(json.dumps(data))
+    bad = tmp_path / "bad-suppressions.yaml"
+    bad.write_text("- fingerprint: not-a-fingerprint\n")
+
+    def client(**kwargs):
+        return GuardedClient(transport=httpx.MockTransport(
+            lambda request: httpx.Response(200, json={"id": "object-1"})), **kwargs)
+
+    with patch.object(ledgerprobe, "GuardedClient", side_effect=client):
+        code = ledgerprobe.main([
+            "--spec", str(tmp_path / "spec.json"), "--rules", str(tmp_path / "rules.json"),
+            "--inputs", str(tmp_path / "inputs.json"), "--sarif", str(tmp_path / "x.sarif"),
+            "--suppressions", str(bad), "--max-rps", "10000",
+        ])
+    assert code == 2
+
+
+def test_tracker_error_exit_three_after_reports(tmp_path):
+    integrations = tmp_path / "integrations.yaml"
+    integrations.write_text(json.dumps({
+        "schema_version": "ledgerprobe-integrations/1",
+        "tracker": {"provider": "jira", "base_url": "https://jira.test",
+                    "project": "SEC", "token_env": "LP_TOKEN",
+                    "target_label": "test"},
+    }))
+    def handler(request):
+        return httpx.Response(200, json={"id": "object-1"})
+    with patch.object(ledgerprobe, "process_tickets",
+                      new=AsyncMock(return_value=TicketRun(errors=["tracker request failed"]))):
+        code, sarif, _ = scan(tmp_path, handler, extra=(
+            "--integrations", str(integrations), "--fail-on-tracker-error"))
+    assert code == 3
+    assert (tmp_path / "results.sarif").exists()
+    assert sarif["runs"][0]["results"]

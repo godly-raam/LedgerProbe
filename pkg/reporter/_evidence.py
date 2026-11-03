@@ -23,6 +23,13 @@ def result_properties(result):
             properties[name] = result[name]
     if isinstance(result.get("spec_drift"), str) and result["spec_drift"]:
         properties["spec_drift"] = result["spec_drift"]
+    if result.get("baseline_status") in {"new", "unchanged"}:
+        properties["baseline_status"] = result["baseline_status"]
+    if result.get("status") == "suppressed" and isinstance(result.get("suppression"), dict):
+        suppression = result["suppression"]
+        properties["suppressed"] = True
+        if isinstance(suppression.get("owner"), str) and suppression["owner"]:
+            properties["suppression_owner"] = suppression["owner"]
     raw = result.get("evidence")
     if not isinstance(raw, dict):
         return properties

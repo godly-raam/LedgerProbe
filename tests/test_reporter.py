@@ -55,7 +55,8 @@ def test_sarif_metadata_locations_and_statuses(tmp_path):
         assert finding["level"] == "error"
         assert finding["locations"] == [{"logicalLocations": [{"fullyQualifiedName": endpoint}]}]
         assert set(finding["partialFingerprints"]) == {"ledgerprobe/v1"}
-        assert len(finding["partialFingerprints"]["ledgerprobe/v1"]) == 64
+        assert finding["partialFingerprints"]["ledgerprobe/v1"].startswith("lp1:")
+        assert len(finding["partialFingerprints"]["ledgerprobe/v1"]) == 68
     invocation = run["invocations"][0]
     assert invocation["executionSuccessful"] is False
     assert invocation["toolExecutionNotifications"] == [{
@@ -189,9 +190,9 @@ def test_junit_all_statuses_and_xml_escaping(tmp_path):
     cases = suite.findall("testcase")
     assert len(cases) == 4
     assert cases[0].attrib == {"classname": "ownership", "name": 'Check <owner> & "reader" [GET /items/{id}]'}
-    assert len(cases[0]) == 0
+    assert cases[0].find(".//property[@name='ledgerprobe.fingerprint']") is not None
     for case, tag in zip(cases[1:], ("failure", "error", "skipped")):
-        assert len(case) == 1
+        assert len(case) == 2
         assert case[0].tag == tag
         assert case[0].text == "Bad <xml> & text\ufffd"
         assert case[0].get("message") == case[0].text

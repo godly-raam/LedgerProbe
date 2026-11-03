@@ -1,0 +1,216 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ledgerprobe.local/schemas/results.schema.json",
+  "title": "LedgerProbe results",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "run", "summary", "findings", "skipped", "errors", "warnings"],
+  "properties": {
+    "schema_version": {"const": "ledgerprobe-results/1"},
+    "run": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tool", "tool_version", "timestamp", "target", "modes"],
+      "properties": {
+        "tool": {"const": "LedgerProbe"},
+        "tool_version": {"type": "string", "minLength": 1},
+        "timestamp": {"type": "string", "format": "date-time"},
+        "target": {"type": "string", "format": "uri"},
+        "modes": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["read_only", "allow_mutations", "spec_check", "sync_modes"],
+          "properties": {
+            "read_only": {"type": "boolean"},
+            "allow_mutations": {"type": "boolean"},
+            "spec_check": {"enum": ["strict", "warn"]},
+            "sync_modes": {
+              "type": "array",
+              "items": {"enum": ["last_byte", "h2_single_packet", "burst"]},
+              "uniqueItems": true
+            }
+          }
+        }
+      }
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["checks", "passed", "failed", "inconclusive", "skipped", "error", "suppressed", "findings"],
+      "properties": {
+        "checks": {"type": "integer", "minimum": 0},
+        "passed": {"type": "integer", "minimum": 0},
+        "failed": {"type": "integer", "minimum": 0},
+        "inconclusive": {"type": "integer", "minimum": 0},
+        "skipped": {"type": "integer", "minimum": 0},
+        "error": {"type": "integer", "minimum": 0},
+        "suppressed": {"type": "integer", "minimum": 0},
+        "findings": {"type": "integer", "minimum": 0},
+        "new": {"type": "integer", "minimum": 0},
+        "unchanged": {"type": "integer", "minimum": 0},
+        "resolved": {"type": "integer", "minimum": 0},
+        "suppressions_active": {"type": "integer", "minimum": 0},
+        "suppressions_expired": {"type": "integer", "minimum": 0},
+        "stale_suppressions": {"type": "integer", "minimum": 0}
+      }
+    },
+    "findings": {"type": "array", "items": {"$ref": "#/$defs/finding"}},
+    "skipped": {"type": "array", "items": {"$ref": "#/$defs/check"}},
+    "errors": {"type": "array", "items": {"$ref": "#/$defs/check"}},
+    "warnings": {"type": "array", "items": {"$ref": "#/$defs/warning"}},
+    "baseline": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["new", "unchanged", "resolved"],
+      "properties": {
+        "new": {"type": "integer", "minimum": 0},
+        "unchanged": {"type": "integer", "minimum": 0},
+        "resolved": {"type": "integer", "minimum": 0}
+      }
+    }
+  },
+  "$defs": {
+    "fingerprint": {"type": "string", "pattern": "^lp1:[0-9a-f]{64}$"},
+    "check_type": {
+      "enum": ["bola", "state_change", "race", "unauthenticated_access", "caller_scope", "shared_scope"]
+    },
+    "cvss": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["vector", "score", "rating"],
+      "properties": {
+        "vector": {"type": "string", "pattern": "^CVSS:3\\.1/"},
+        "score": {"type": "number", "minimum": 0, "maximum": 10},
+        "rating": {"enum": ["none", "low", "medium", "high", "critical"]},
+        "justification": {"type": "string"}
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "overlap_count": {"type": "integer", "minimum": 0},
+        "confirm_runs": {"type": "integer", "minimum": 0},
+        "pages_walked": {"type": "integer", "minimum": 0},
+        "mutation_status": {"type": ["integer", "null"]},
+        "probe_status": {"type": "integer", "minimum": 100, "maximum": 599},
+        "rounds_executed": {"type": "integer", "minimum": 0},
+        "strong_rounds": {"type": "integer", "minimum": 0},
+        "violating_rounds": {"type": "integer", "minimum": 0},
+        "rate_limited_count": {"type": "integer", "minimum": 0},
+        "server_error_count": {"type": "integer", "minimum": 0},
+        "timeout_count": {"type": "integer", "minimum": 0},
+        "verify_unavailable_count": {"type": "integer", "minimum": 0},
+        "max_successes": {"type": "number"},
+        "max_total_effect": {"type": "number"},
+        "first_violation_round": {"type": "integer", "minimum": 1},
+        "canary_matched": {"type": "boolean"},
+        "nonexistent_skipped": {"type": "boolean"},
+        "control_unusable": {"type": "boolean"},
+        "changed": {"type": "boolean"},
+        "probe_matched": {"type": "boolean"},
+        "restore_failed": {"type": "boolean"},
+        "reset_failed": {"type": "boolean"},
+        "verify_unavailable": {"type": "boolean"},
+        "median_spread_ms": {"type": "number", "minimum": 0},
+        "hit_rate": {"type": "number", "minimum": 0, "maximum": 1},
+        "accepted_counts": {
+          "type": "array", "items": {"type": "integer", "minimum": 0}, "maxItems": 20
+        },
+        "scope": {"enum": ["object", "caller", "shared"]},
+        "verification_mode": {"enum": ["marker", "probe", "state_diff"]},
+        "sync_mode": {"enum": ["last_byte", "h2_single_packet", "burst"]},
+        "idempotency_mode": {"enum": ["same", "unique", "none"]},
+        "sync_note": {"enum": ["weak_sync_mode", "h2_unavailable", "h2_coalesce_limit"]},
+        "marker_hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "before_hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "after_hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "control_statuses": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "nonexistent_object": {"type": ["integer", "null"], "minimum": 100, "maximum": 599},
+            "unauthenticated": {"type": ["integer", "null"], "minimum": 100, "maximum": 599}
+          }
+        },
+        "shape_hashes": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "primary": {"type": ["string", "null"], "pattern": "^[a-f0-9]{64}$"},
+            "forbidden": {"type": ["string", "null"], "pattern": "^[a-f0-9]{64}$"},
+            "nonexistent_object": {"type": ["string", "null"], "pattern": "^[a-f0-9]{64}$"},
+            "unauthenticated": {"type": ["string", "null"], "pattern": "^[a-f0-9]{64}$"}
+          }
+        }
+      }
+    },
+    "check": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fingerprint", "rule_id", "method", "path_template", "check_type", "verdict"],
+      "properties": {
+        "fingerprint": {"$ref": "#/$defs/fingerprint"},
+        "rule_id": {"type": "string", "minLength": 1},
+        "method": {"enum": ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "TRACE"]},
+        "path_template": {"type": "string", "pattern": "^/"},
+        "check_type": {"$ref": "#/$defs/check_type"},
+        "verdict": {"enum": ["PASS", "FAIL", "INCONCLUSIVE", "SKIPPED", "ERROR"]},
+        "status": {"enum": ["passed", "failed", "inconclusive", "skipped", "error", "suppressed"]},
+        "reason": {"type": "string"},
+        "notes": {"type": "array", "items": {"type": "string"}},
+        "confidence": {"enum": ["high", "reduced"]},
+        "severity": {"enum": ["info", "low", "medium", "high", "critical"]},
+        "baseline_status": {"enum": ["new", "unchanged"]}
+      }
+    },
+    "finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fingerprint", "rule_id", "method", "path_template", "check_type", "verdict",
+                   "status", "cvss", "evidence"],
+      "properties": {
+        "fingerprint": {"$ref": "#/$defs/fingerprint"},
+        "rule_id": {"type": "string", "minLength": 1},
+        "method": {"enum": ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "TRACE"]},
+        "path_template": {"type": "string", "pattern": "^/"},
+        "check_type": {"$ref": "#/$defs/check_type"},
+        "verdict": {"enum": ["FAIL"]},
+        "status": {"enum": ["failed", "suppressed"]},
+        "reason": {"type": "string"},
+        "notes": {"type": "array", "items": {"type": "string"}},
+        "confidence": {"enum": ["high", "reduced"]},
+        "severity": {"enum": ["info", "low", "medium", "high", "critical"]},
+        "cvss": {"$ref": "#/$defs/cvss"},
+        "evidence": {"$ref": "#/$defs/evidence"},
+        "baseline_status": {"enum": ["new", "unchanged"]},
+        "suppression": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["owner", "reason", "expires"],
+          "properties": {
+            "owner": {"type": "string", "minLength": 1},
+            "reason": {"type": "string", "minLength": 20},
+            "expires": {"type": "string", "format": "date"}
+          }
+        }
+      },
+      "allOf": [{
+        "if": {"properties": {"status": {"const": "suppressed"}}},
+        "then": {"required": ["suppression"]}
+      }]
+    },
+    "warning": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code"],
+      "properties": {
+        "code": {"enum": ["suppression_expired", "stale_suppression"]},
+        "owner": {"type": "string"},
+        "expires": {"type": "string", "format": "date"},
+        "fingerprint": {"$ref": "#/$defs/fingerprint"},
+        "rule_id": {"type": "string"}
+      }
+    }
+  }
+}

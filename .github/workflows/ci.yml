@@ -10,6 +10,35 @@ permissions:
   contents: read
 
 jobs:
+  secret-scan:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out full history for gitleaks
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Trivy
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
+            | sh -s -- -b "$RUNNER_TEMP/bin"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+
+      - name: Scan filesystem secrets with Trivy
+        run: trivy fs --scanners secret --skip-dirs benchmark/.out --skip-dirs .venv --skip-dirs dashboard/.next --exit-code 1 .
+
+      - name: Install gitleaks
+        run: |
+          curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.28.0/gitleaks_8.28.0_linux_x64.tar.gz \
+            | tar -xz -C "$RUNNER_TEMP/bin" gitleaks
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+
+      - name: Scan full git history with gitleaks
+        run: gitleaks detect --source . --redact
+
   audit-and-build:
     name: Audit, fuzz, and build
     runs-on: ubuntu-latest
@@ -85,7 +114,7 @@ jobs:
           fi
 
           cd ../logic-fuzzer
-          python main.py --base-url http://127.0.0.1:8000 --out reports
+          python main.py --base-url http://127.0.0.1:8000 --out reports --allow-mutations
 
           python - <<'PY'
           import glob

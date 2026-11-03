@@ -1,16 +1,16 @@
 """SARIF 2.1.0 output for API checks (endpoints are not source files)."""
 
-import hashlib
 import json
 from pathlib import Path
 
 from ._evidence import result_properties
+from ..fingerprints import result_fingerprint
 
 
 _LEVELS = {"critical": "error", "high": "error", "medium": "warning", "low": "note", "info": "note"}
 
 
-def write_sarif(results, path, *, source_uri=None) -> Path:
+def write_sarif(results, path, *, source_uri=None, warnings=()) -> Path:
     """Write failed checks as findings and execution errors as notifications.
 
     Pass the tracked local spec's repository-relative URI as ``source_uri`` to
@@ -18,6 +18,11 @@ def write_sarif(results, path, *, source_uri=None) -> Path:
     Without it, locations describe only the logical API endpoints.
     """
     rules, indexes, findings, notifications = [], {}, [], []
+    for warning in warnings:
+        if isinstance(warning, dict) and warning.get("code"):
+            notifications.append({"level": "warning", "message": {"text": warning["code"]},
+                                  "properties": {key: value for key, value in warning.items()
+                                                 if key in {"code", "owner", "expires", "fingerprint", "rule_id"}}})
     execution_failed = False
     for result in results:
         if result.get("spec_drift"):
@@ -27,7 +32,6 @@ def write_sarif(results, path, *, source_uri=None) -> Path:
                 "properties": {"spec_drift": result["spec_drift"]},
             })
         if result["status"] == "inconclusive":
-            identity = json.dumps([result["rule_id"], result["method"], result["path"]], ensure_ascii=True)
             inconclusive_location: dict[str, object] = {"logicalLocations": [{
                 "fullyQualifiedName": result["method"] + " " + result["path"],
             }]}
@@ -35,10 +39,10 @@ def write_sarif(results, path, *, source_uri=None) -> Path:
                 inconclusive_location["physicalLocation"] = {"artifactLocation": {"uri": str(source_uri)}}
             findings.append({
                 "level": "note",
-                "message": {"text": result["message"] or result["name"]},
+                "message": {"text": result.get("message") or result["name"]},
                 "locations": [inconclusive_location],
                 "partialFingerprints": {
-                    "ledgerprobe/v1": hashlib.sha256(identity.encode("utf-8")).hexdigest(),
+                    "ledgerprobe/v1": result_fingerprint(result),
                 },
                 "kind": "review",
                 "properties": {"status": "inconclusive", "tags": ["inconclusive"], **result_properties(result)},
@@ -53,7 +57,7 @@ def write_sarif(results, path, *, source_uri=None) -> Path:
                 "shortDescription": {"text": result["name"]},
                 "defaultConfiguration": {"level": _LEVELS[result["severity"]]},
                 "properties": {
-                    "security-severity": str(result["cvss_score"]),
+                    "security-severity": str(result.get("cvss", {}).get("score", result["cvss_score"])),
                     "tags": ["security", "owasp", "owasp/" + result["owasp_category"]],
                 },
             })
@@ -68,8 +72,7 @@ def write_sarif(results, path, *, source_uri=None) -> Path:
             if properties := result_properties(result):
                 notification["properties"] = properties
             notifications.append(notification)
-        elif result["status"] == "failed":
-            identity = json.dumps([rule_id, result["method"], result["path"]], ensure_ascii=True)
+        elif result["status"] in {"failed", "suppressed"}:
             location: dict[str, object] = {"logicalLocations": [{
                 "fullyQualifiedName": result["method"] + " " + result["path"],
             }]}
@@ -79,12 +82,17 @@ def write_sarif(results, path, *, source_uri=None) -> Path:
                 "ruleId": rule_id,
                 "ruleIndex": indexes[rule_id],
                 "level": _LEVELS[result["severity"]],
-                "message": {"text": result["message"] or result["name"]},
+                "message": {"text": result.get("message") or result["name"]},
                 "locations": [location],
                 "partialFingerprints": {
-                    "ledgerprobe/v1": hashlib.sha256(identity.encode("utf-8")).hexdigest(),
+                    "ledgerprobe/v1": result_fingerprint(result),
                 },
             }
+            if result.get("status") == "suppressed" and isinstance(result.get("suppression"), dict):
+                finding["suppressions"] = [{
+                    "kind": "external",
+                    "justification": result["suppression"].get("reason", "external suppression"),
+                }]
             if properties := result_properties(result):
                 finding["properties"] = properties
             findings.append(finding)

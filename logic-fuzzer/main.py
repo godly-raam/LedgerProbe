@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import ipaddress
 import os
+import urllib.parse
 from pathlib import Path
 
 from fuzzer.api import BankAPI
@@ -12,7 +14,26 @@ from fuzzer.suites import run_bola, run_mcc, run_race
 SUITES = {"bola": run_bola, "mcc": run_mcc, "race": run_race}
 
 
+def _loopback_url(value: str) -> bool:
+    parsed = urllib.parse.urlsplit(value)
+    host = (parsed.hostname or "").rstrip(".").lower()
+    if not host:
+        return False
+    if host == "localhost" or host.endswith(".localhost"):
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
 async def execute(args: argparse.Namespace) -> int:
+    if not args.allow_mutations:
+        print("error: the legacy lab fuzzer is destructive; pass --allow-mutations")
+        return 2
+    if not _loopback_url(args.base_url):
+        print("error: the legacy lab fuzzer only accepts loopback targets")
+        return 2
     selected = [suite.strip() for suite in args.suites.split(",") if suite.strip()]
     unknown = [suite for suite in selected if suite not in SUITES]
     if not selected or unknown:
@@ -76,6 +97,8 @@ def main() -> int:
     parser.add_argument("--out", default=str(Path(__file__).parent / "reports"), help="report output directory")
     parser.add_argument("--suites", default="bola,mcc,race", help="comma-separated suites: bola,mcc,race")
     parser.add_argument("--timeout", type=float, default=15.0, help="per-request timeout in seconds")
+    parser.add_argument("--allow-mutations", action="store_true",
+                        help="required acknowledgement that the legacy lab suites mutate state")
     return asyncio.run(execute(parser.parse_args()))
 
 

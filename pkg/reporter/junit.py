@@ -6,6 +6,7 @@ import re
 from xml.etree import ElementTree as ET
 
 from ._evidence import result_properties
+from ..fingerprints import result_fingerprint
 
 
 _INVALID_XML = re.compile("[^\x09\x0a\x0d\x20-\ud7ff\ue000-\ufffd\U00010000-\U0010ffff]")
@@ -15,27 +16,40 @@ def _text(value):
     return _INVALID_XML.sub("\ufffd", value)
 
 
-def write_junit(results, path) -> Path:
+def write_junit(results, path, *, warnings=()) -> Path:
     results = list(results)
     suite = ET.Element("testsuite", {
         "name": "LedgerProbe", "tests": str(len(results)),
         "failures": str(sum(r["status"] == "failed" for r in results)),
         "errors": str(sum(r["status"] == "error" for r in results)),
-        "skipped": str(sum(r["status"] in {"skipped", "inconclusive"} for r in results)),
+        "skipped": str(sum(r["status"] in {"skipped", "inconclusive", "suppressed"} for r in results)),
     })
+    if warnings:
+        warning_node = ET.SubElement(suite, "properties")
+        for warning in warnings:
+            if isinstance(warning, dict) and warning.get("code"):
+                ET.SubElement(warning_node, "property", {
+                    "name": "ledgerprobe.warning",
+                    "value": _text(json.dumps(warning, sort_keys=True)),
+                })
     for result in results:
         case = ET.SubElement(suite, "testcase", {
             "classname": _text(result["rule_id"]),
             "name": _text(f'{result["name"]} [{result["method"]} {result["path"]}]'),
         })
-        tag = {"failed": "failure", "error": "error", "skipped": "skipped", "inconclusive": "skipped"}.get(result["status"])
+        tag = {"failed": "failure", "error": "error", "skipped": "skipped",
+               "inconclusive": "skipped", "suppressed": "skipped"}.get(result["status"])
         if tag:
-            message = result["message"]
-            if result["status"] == "inconclusive" and result.get("reason"):
+            message = result.get("message") or result.get("name", result["rule_id"])
+            if result["status"] == "suppressed":
+                reason = (result.get("suppression") or {}).get("reason", "suppressed")
+                message = f"Suppressed: {reason}"
+            elif result["status"] == "inconclusive" and result.get("reason"):
                 message = f"{message}: {result['reason']}" if message else result["reason"]
             message = _text(message)
             ET.SubElement(case, tag, {"message": message}).text = message
-        if properties := result_properties(result):
+        properties = {"fingerprint": result_fingerprint(result), **result_properties(result)}
+        if properties:
             node = ET.SubElement(case, "properties")
             for name, value in properties.items():
                 encoded = json.dumps(value, sort_keys=True) if not isinstance(value, str) else value

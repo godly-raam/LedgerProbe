@@ -142,7 +142,11 @@ assertions:
     expected: forbidden
 ```
 
+Optional `remediation` is a nonempty rule string copied into tracker ticket bodies only; it is never sent to the scan target.
+
 The bundled `abac_isolation.yaml` uses opt-in differential evidence: accepted denials, owner canaries/unique value overlap, nonexistent-object and unauthenticated controls, and two confirmation repeats before FAIL. Ambiguous success, overload, and timeout responses are INCONCLUSIVE rather than security findings. `rulesets/legacy_status_only.yaml` preserves the original status-only policy. See the [differential rule contract](pkg/rules/README.md#differential-abac-isolation-extension) for verdicts, reason codes, and privacy-safe evidence.
+
+Race checks are validated on fixtures only. No documented race cases were found in VAmPI or crAPI, so this repository does not claim a live race benchmark against either target. See [`docs/RACE.md`](docs/RACE.md) for synchronization modes, invariants, verdicts, and the local detection study.
 
 Input JSON has `contexts` (named HTTP-header maps) and `variables` (JSON values). Assertions support status codes, named headers, JSON field equality, existence, and types. YAML loading rejects unsafe constructors, duplicate keys, unknown fields, and malformed policies. See [`pkg/rules/README.md`](pkg/rules/README.md) for the full format, body/parameter inputs, and execution contract.
 
@@ -157,9 +161,35 @@ The parser builds candidate graph edges from exact response field/leaf names to 
 - A 429 halves the admission limit immediately; a window with at least five responses and at least 50% 5xx also halves it. Twenty successful responses recover one slot. `Retry-After` applies a shared cooldown capped at 60 seconds; 429 without a valid header pauses for one second. In-flight requests are not cancelled.
 - `--read-only` permits only GET, HEAD, and OPTIONS, including dependencies. An explicit `--allow-mutation 'POST:/exact/url-encoded/path'` exception permits that method/path, not a wildcard or template. Read-only cannot guarantee a misdesigned GET endpoint is side-effect-free.
 - Exit codes: **0** completed checks passed or were inconclusive; **1** policy failure (or inconclusive with `--fail-on-inconclusive`); **2** configuration/execution/notification error or no executable checks. Individual safety/absent-endpoint skips are visible in JUnit; partial scans can include skips and still pass.
-- The legacy `logic-fuzzer/main.py` remains a **destructive lab tool**. LedgerProbe safeguards do not change its intentionally concurrent payment/reset behavior.
+- The legacy `logic-fuzzer/main.py` remains a **destructive lab-only legacy path**. It now refuses non-loopback targets and requires `--allow-mutations`; it does not go through the LedgerProbe race engine.
 
-SARIF 2.1.0 includes rule/CVSS/OWASP metadata, stable fingerprints, logical endpoint locations, and execution-error notifications. Local spec files inside this repository also receive a physical spec-file location, without invented line numbers. GitHub Code Scanning can ingest SARIF; use a checked-in spec for source-linked alerts. URL/external specs have endpoint-only locations, so source-code UI presentation may be limited. Upload JUnit XML through your CI's normal test-results publisher. **GitLab's native security dashboard requires GitLab-specific security-report JSON; SARIF is not a substitute for that schema.**
+SARIF 2.1.0 includes rule/CVSS/OWASP metadata, `lp1` stable fingerprints, logical endpoint locations, suppressions, and execution/baseline/suppression notifications. Local spec files inside this repository also receive a physical spec-file location, without invented line numbers. GitHub Code Scanning can ingest SARIF; use a checked-in spec for source-linked alerts. URL/external specs have endpoint-only locations, so source-code UI presentation may be limited. Upload JUnit XML through your CI's normal test-results publisher. **GitLab's native security dashboard requires GitLab-specific security-report JSON; SARIF is not a substitute for that schema.**
+
+### Versioned results, suppressions, and baselines
+
+Add `--json results.json` to emit the versioned JSON document defined by [`schemas/results.schema.json`](schemas/results.schema.json). Its `schema_version` is `ledgerprobe-results/1`; findings carry `lp1:` fingerprints, CVSS 3.1 vector/score/rating, confidence, and allowlisted evidence. The run target is a separate top-level `target` field, never part of a fingerprint. Only path templates, role names, counts, hashes, and statuses are retained; expanded object IDs, tokens, request bodies, and markers are not.
+
+`--suppressions .ledgerprobe-suppressions.yaml` accepts a strict list of external exceptions. Each entry needs `fingerprint`, a reason of at least 20 characters, `owner`, `created`, and `expires`; high/critical findings also need `ticket` and `approved_by`. Expiry is capped at 180 days by default (`--max-suppression-days`). An active entry makes the result `suppressed`: SARIF emits an external suppression, JUnit records a skip, JSON status is `suppressed`, and the finding no longer controls exit status. Expired entries count again and emit `suppression_expired`; unused entries emit `stale_suppression`, and `--fail-on-stale` makes that exit 1. ERROR results cannot be suppressed.
+
+```yaml
+- fingerprint: lp1:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+  reason: Accepted temporary exception for the staging tenant
+  owner: security-team
+  created: 2026-11-01
+  expires: 2026-12-01
+  ticket: SEC-123
+  approved_by: security-lead
+```
+
+For CI gating, `--baseline old-results.json` classifies current findings as `new`, `unchanged`, or `resolved`. Only new and unchanged findings are emitted with a baseline flag. `--fail-on new` fails only on a new, non-suppressed FAIL; `--fail-on any` is the default; `--fail-on none` disables finding-based failure. Compare two saved documents without touching a target:
+
+```bash
+python ledgerprobe.py diff old-results.json new-results.json
+```
+
+The diff prints only new/resolved/unchanged fingerprints and rule IDs. A schema mismatch or unreadable baseline is a configuration error (exit 2), not a finding.
+
+CVSS is computed from a strict CVSS 3.1 base vector. Defaults are chosen per check type, and a rule can override them with `cvss: {vector, justification}`. The result JSON and SARIF `security-severity` use the computed score; a reduced-confidence finding keeps that score and reports confidence separately. The old `cvss_score` field remains accepted for compatibility but is deprecated and is not used for exit codes or headline output. The legacy logic-fuzzer 0-100 score/grade remains for its existing dashboard format, but is deprecated for LedgerProbe gating and is not used in LedgerProbe exit codes or headline output.
 
 ### Optional notifications
 
@@ -176,6 +206,12 @@ Pass `--webhooks /secure/webhooks.json` containing an array such as:
 ```
 
 Kinds: `slack`, `teams` (text-compatible incoming webhook), `jira` (Cloud REST v3 Task creation), `linear` (GraphQL issue creation), and `generic`. Only failed **HIGH/CRITICAL** checks are sent. URLs must use HTTPS except loopback development endpoints. These are explicit external POSTs even during read-only scans; a separate guarded notifier client permits them without relaxing target safety. This shares rule metadata and endpoint templates with the configured third parties, may incur service costs/rate limits, and needs provider credentials where applicable. Delivery is single-attempt, without deduplication; rerunning a scan can create duplicate tickets. Reports are written before notification, and notification failures return exit code 2.
+
+### Ticket lifecycle (Jira and Linear)
+
+The legacy webhook path above is unchanged and remains useful for simple notifications. Durable ticket lifecycle management is opt-in through `ledgerprobe-integrations.yaml` and `--tickets dry-run|apply|off` (default `dry-run`). `apply` is required for any tracker or Slack network call. The lifecycle is keyed by the `lp1:` fingerprint plus a configured target label, not by title or local state. It creates on the first FAIL, comments only on material confidence/CVSS/reason/evidence changes with a seven-day default cooldown, reopens and labels regressions, comments explicit retests, and can resolve after two marked PASS runs only when `auto_close: true`. INCONCLUSIVE and ERROR never create tickets; suppressed findings never create new tickets. A flood cap produces one summary ticket. Tracker failures are warnings (exit 3 only with `--fail-on-tracker-error`) and never change scan verdicts. See [`docs/INTEGRATIONS.md`](docs/INTEGRATIONS.md) for strict configuration, Jira/Linear examples, lifecycle details, and the PR dry-run/apply workflow.
+
+Suppression files are reviewed like code: [`.github/CODEOWNERS`](.github/CODEOWNERS) requires the security owner to review `.ledgerprobe-suppressions.yaml` and `rulesets/`. A merged PR is the approval record for a suppression; do not add an unreviewed suppression directly to `main`.
 
 ### Demo and tests
 
