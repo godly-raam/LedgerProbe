@@ -4,17 +4,24 @@ from __future__ import annotations
 
 import asyncio
 import math
+import os
 from collections import deque
 from email.utils import parsedate_to_datetime
 from time import monotonic, time
 
 import httpx
 
-__all__ = ["GuardedClient", "TokenBucket", "UnsafeRequest"]
+__all__ = ["GuardedClient", "TokenBucket", "UnsafeRequest", "KillSwitch", "AUTH_FLOW"]
+
+AUTH_FLOW = object()
 
 
 class UnsafeRequest(ValueError):
     """A request would violate the client's safety policy."""
+
+
+class KillSwitch(UnsafeRequest):
+    """The operator requested a graceful stop."""
 
 
 def _positive(value, name: str) -> float:
@@ -93,6 +100,8 @@ class GuardedClient:
         allow_mutations=(),
         timeout=15.0,
         transport=None,
+        default_headers=None,
+        kill_file=None,
     ):
         rate = _positive(max_rps, "max_rps")
         _positive(concurrency, "concurrency")
@@ -119,6 +128,8 @@ class GuardedClient:
         self._window = deque(maxlen=20)
         self._successes = 0
         self._closed = False
+        self._default_headers = {str(k): str(v) for k, v in (default_headers or {}).items()}
+        self._kill_file = kill_file
         self._http = httpx.AsyncClient(
             base_url=base_url, timeout=timeout, transport=transport,
             follow_redirects=False,
@@ -204,11 +215,16 @@ class GuardedClient:
         return min(60.0, max(0.0, delay))
 
     async def request(self, method: str, url, **kwargs) -> httpx.Response:
+        if self._kill_file and os.path.exists(self._kill_file):
+            raise KillSwitch("kill switch is active")
         follow = kwargs.pop("follow_redirects", False)
         if follow not in (False, httpx.USE_CLIENT_DEFAULT):
             raise UnsafeRequest("redirects cannot be enabled")
-        auth_flow = kwargs.pop("auth_flow", False)
+        auth_flow = kwargs.pop("auth_flow", None) is AUTH_FLOW
         auth = kwargs.pop("auth", httpx.USE_CLIENT_DEFAULT)
+        headers = dict(kwargs.pop("headers", {}) or {})
+        headers = {**self._default_headers, **headers}
+        kwargs["headers"] = headers
         request = self._http.build_request(method, url, **kwargs)
         path = request.url.raw_path.split(b"?", 1)[0].decode("ascii")
         if (
