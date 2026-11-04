@@ -13,6 +13,7 @@ from urllib.parse import quote, urlsplit
 
 import httpx
 
+from pkg.auth import AuthManager, load_auth_config
 from pkg.guardrails import GuardedClient
 from pkg.integrations import TrackerError, load_integrations, process_tickets
 from pkg.parser import load_inventory
@@ -56,6 +57,10 @@ def arguments(argv=None) -> argparse.Namespace:
     parser.add_argument("--rules", nargs="+", required=True, help="YAML policy files")
     parser.add_argument("--base-url", help="explicitly override every spec server with this target")
     parser.add_argument("--inputs", type=Path, help="JSON file containing contexts and variables")
+    parser.add_argument("--auth", type=Path,
+                        help="strict ledgerprobe-auth.yaml with pluggable identity providers")
+    parser.add_argument("--strict-auth", action="store_true",
+                        help="reject legacy static contexts in inputs.json")
     parser.add_argument("--sarif", type=Path, default=Path("results.sarif"))
     parser.add_argument("--junit", type=Path, help="optional JUnit XML output")
     parser.add_argument("--json", type=Path, help="optional versioned JSON results output")
@@ -120,6 +125,14 @@ async def execute(args: argparse.Namespace) -> int:
     if not rules:
         raise ValueError("at least one rule is required")
     inputs = read_inputs(args.inputs)
+    auth_config = load_auth_config(args.auth) if args.auth else None
+    if inputs.get("contexts") and auth_config is not None:
+        raise ValueError("use --auth or legacy inputs.json contexts, not both")
+    if inputs.get("contexts") and auth_config is None:
+        if args.strict_auth:
+            raise ValueError("legacy_static_credentials: migrate inputs.json contexts to --auth")
+        print("[!] legacy_static_credentials: inputs.json static contexts are deprecated",
+              file=sys.stderr)
     webhooks = []
     if args.webhooks:
         webhooks = json.loads(args.webhooks.read_text(encoding="utf-8"))
@@ -143,10 +156,26 @@ async def execute(args: argparse.Namespace) -> int:
             if args.spec_check == "warn":
                 merge_traffic_inventory(inventory, traffic)
         print(f"[*] {len(inventory['endpoints'])} endpoints; {len(inventory['graph'])} dependency candidates")
-        results = await run_rules(inventory, rules, client, spec_check=args.spec_check,
-                                  allow_mutations=args.allow_mutations,
-                                  allowed_hosts=args.allow_host, read_only=args.read_only,
-                                  accept_generated=args.accept_generated, **inputs)
+        auth_manager = None
+        contexts = inputs.get("contexts", {})
+        variables = inputs.get("variables", {})
+        if auth_config is not None:
+            auth_manager = AuthManager(auth_config, variables, inventory["base_url"], client,
+                                       allowed_hosts=args.allow_host)
+        try:
+            if auth_manager is not None:
+                await auth_manager.setup()
+                contexts = await auth_manager.initialize()
+                variables = auth_manager.variables
+            results = await run_rules(
+                inventory, rules, client, contexts=contexts, variables=variables,
+                spec_check=args.spec_check, allow_mutations=args.allow_mutations,
+                allowed_hosts=args.allow_host, read_only=args.read_only,
+                accept_generated=args.accept_generated, auth_manager=auth_manager,
+            )
+        finally:
+            if auth_manager is not None:
+                await auth_manager.teardown()
     warnings = []
     suppression_stats = None
     suppressions_path = args.suppressions

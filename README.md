@@ -101,7 +101,10 @@ python -m pip install -r requirements.txt
 python ledgerprobe.py --help
 ```
 
-Prepare a JSON inputs file using [`examples/inputs.json`](examples/inputs.json), replacing the example tokens with **two authorized test identities** and the object ID with an object owned by the primary identity. Keep real credentials outside version control and restrict the file to mode `0600`.
+Prepare a JSON variables file using [`examples/inputs.json`](examples/inputs.json), or use the pluggable
+providers in [`docs/AUTH.md`](docs/AUTH.md) so tokens never enter a file. Legacy
+`inputs.json` contexts still work with a `legacy_static_credentials` warning;
+`--strict-auth` rejects them.
 
 ```bash
 python ledgerprobe.py \
@@ -113,7 +116,7 @@ python ledgerprobe.py \
   --sarif results.sarif --junit results.xml
 ```
 
-Adapt the rule's `target_endpoints` and parameter names to your inventory; the bundled isolation rule targets the lab API, not arbitrary services. `--spec` also accepts an HTTP(S) URL, Swagger 2.0, OpenAPI 3.0/3.1 JSON/YAML, or a Postman Collection 2.1 file. The engine validates OpenAPI and normalizes Postman folders, variables, requests, bodies, and authentication metadata. Authentication metadata is **not** automatically used as credentials: supply named header contexts explicitly.
+Adapt the rule's `target_endpoints` and parameter names to your inventory; the bundled isolation rule targets the lab API, not arbitrary services. `--spec` also accepts an HTTP(S) URL, Swagger 2.0, OpenAPI 3.0/3.1 JSON/YAML, or a Postman Collection 2.1 file. The engine validates OpenAPI and normalizes Postman folders, variables, requests, bodies, and authentication metadata. Authentication metadata is **not** automatically used as credentials: use `--auth` with [`docs/AUTH.md`](docs/AUTH.md), or legacy named header contexts explicitly.
 
 The spec's server is used unless `--base-url` explicitly overrides **all** servers. A missing/relative server needs an override. Differing operation-level servers fail closed rather than silently sending credentials to a second target. Only scan trusted specs and rules against authorized targets; this is not a network sandbox. External `$ref` documents must be bundled into local references before scanning.
 

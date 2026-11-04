@@ -331,14 +331,62 @@ def _lenient_scan(base: str, target: Target, inputs: dict[str, Any]) -> dict[str
     return results
 
 
+def _auth_contexts(auth_path: Path, base: str, variables: dict[str, Any]) -> dict[str, dict[str, str]]:
+    """Resolve login_request identities for the legacy status-only harness."""
+    document = yaml.safe_load(auth_path.read_text(encoding="utf-8"))
+    contexts: dict[str, dict[str, str]] = {}
+    for name, identity in (document.get("identities") or {}).items():
+        params = identity["params"]
+        body = {}
+        for key, value in params["body"].items():
+            if key.endswith("_ref"):
+                ref = value
+                if ref.startswith("env:"):
+                    body[key[:-4]] = os.environ[ref[4:]]
+                elif ref.startswith("file:"):
+                    path, _, secret_key = ref[5:].rpartition("#")
+                    text = Path(path).read_text(encoding="utf-8")
+                    if text.lstrip().startswith("{"):
+                        body[key[:-4]] = json.loads(text)[secret_key]
+                    else:
+                        values = dict(line.split("=", 1) for line in text.splitlines()
+                                      if "=" in line and not line.lstrip().startswith("#"))
+                        body[key[:-4]] = values[secret_key]
+                else:
+                    raise ValueError("legacy harness supports env/file refs only")
+            else:
+                body[key] = _substitute(value, variables)
+        request = urllib.request.Request(
+            base.rstrip("/") + params["path"], data=json.dumps(body).encode(),
+            headers={"Accept": "application/json", "Content-Type": "application/json"},
+            method=params["method"],
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=10) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            raise ValueError(f"legacy auth failed: {exc.code}") from None
+        token = payload
+        for part in params["token_json_path"].split("."):
+            token = token[part]
+        contexts[name] = {"Authorization": params.get("header_format", "Bearer {token}").format(token=token)}
+    return contexts
+
+
 def run_scan(target: Target, instance: str, mode: str, base_url: str,
              inputs: Path, out: Path, repeat: int = 1) -> dict[str, dict[str, str | None]]:
     sandbox = out / target.name / instance / mode / f"run-{repeat}"
     sandbox.mkdir(parents=True, exist_ok=True)
     sarif = sandbox / "results.sarif"
     junit = sandbox / "results.xml"
+    auth = inputs.with_name("ledgerprobe-auth.yaml")
     if mode == "legacy_lenient":
         data = json.loads(inputs.read_text(encoding="utf-8"))
+        if auth.exists():
+            try:
+                data["contexts"] = _auth_contexts(auth, base_url, data.get("variables", {}))
+            except (OSError, ValueError, KeyError):
+                return {}
         return _lenient_scan(base_url, target, data)
     rules = target.rules_legacy if mode == "legacy_strict" else target.rules_differential
     command = [
@@ -348,6 +396,8 @@ def run_scan(target: Target, instance: str, mode: str, base_url: str,
         "--sarif", str(sarif), "--junit", str(junit),
         "--max-rps", "20", "--timeout", "10",
     ]
+    if auth.exists():
+        command += ["--auth", str(auth)]
     if target.read_only:
         command.append("--read-only")
     if target.name == "vampi":
@@ -590,7 +640,8 @@ def cleanup_generated_inputs(out: Path, target_name: str | None = None) -> int:
     removed = 0
     if not root.exists():
         return removed
-    for path in root.rglob("inputs.json"):
+    for path in [*root.rglob("inputs.json"), *root.rglob("ledgerprobe-auth.yaml"),
+                 *root.rglob("staging-secrets.env")]:
         if path.is_file():
             path.unlink(missing_ok=True)
             removed += 1

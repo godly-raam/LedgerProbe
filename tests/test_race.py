@@ -100,7 +100,7 @@ def test_race_corpus(profile: str, spec: dict, tmp_path: Path):
     elif spec["expected_verdict"] == "SKIPPED":
         assert exit_code == 2
     text = (tmp_path / "results.sarif").read_text() + (tmp_path / "results.xml").read_text()
-    for secret in ("balance", "100", "token-owner", "token-other", "Idempotency-Key"):
+    for secret in ("balance", "7391528", "token-owner", "token-other", "Idempotency-Key"):
         assert secret not in text
 
 
@@ -114,7 +114,7 @@ def test_race_restore_failure_is_error_and_names_rule(tmp_path: Path):
     assert (result["verdict"], result.get("reason")) == ("ERROR", "restore_failed")
     text = (tmp_path / "results.sarif").read_text() + (tmp_path / "results.xml").read_text()
     assert "authz-race-wallet-restore" in text
-    for secret in ("balance", "100", "token-owner", "token-other", "race-canary"):
+    for secret in ("balance", "7391528", "token-owner", "token-other", "race-canary"):
         assert secret not in text
 
 
@@ -127,7 +127,7 @@ def test_race_report_has_no_marker_or_balance_values(tmp_path: Path):
         process.wait(timeout=3)
     assert result["verdict"] == "FAIL"
     text = (tmp_path / "results.sarif").read_text() + (tmp_path / "results.xml").read_text()
-    for secret in ("balance", "100", "token-owner", "token-other", "race-canary"):
+    for secret in ("balance", "7391528", "token-owner", "token-other", "race-canary"):
         assert secret not in text
 
 

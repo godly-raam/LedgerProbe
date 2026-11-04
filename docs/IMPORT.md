@@ -39,7 +39,8 @@ a reviewer removes it intentionally.
 4. Keep `traffic-review/inputs.generated.json` local. It contains owner object
    IDs and candidate canaries from the captures, plus `REPLACE_ME` token
    placeholders. It is written mode `0600` and is refused unless the path is
-   git-ignored or the operator passes `--allow-tracked-output` explicitly.
+   git-ignored. `--allow-tracked-output` is a warned last resort for unusual
+   throwaway workspaces; never use it in a shared repository.
 5. Replace the token placeholders in a private copy of the inputs file. Never
    commit the inputs file or paste raw capture tokens into a command.
 6. Accept the reviewed candidates explicitly and run against staging with the

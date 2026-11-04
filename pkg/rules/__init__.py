@@ -18,6 +18,7 @@ from urllib.parse import quote, urlsplit
 import httpx
 import yaml
 
+from ..auth import AuthError
 from ..guardrails import UnsafeRequest
 from ..cvss import parse_vector, resolve_cvss
 from ..fingerprints import check_type, fingerprint, identity_roles
@@ -535,11 +536,13 @@ def _equal(left, right):
 
 
 class _Runtime:
-    def __init__(self, inventory, client, contexts, variables):
+    def __init__(self, inventory, client, contexts, variables, auth=None):
         self.inventory = inventory
         self.client = client
         self.contexts = contexts
         self.variables = variables
+        self.auth = auth
+        self.notes = set()
         self.stores = {}
         self.operations = {}
         for endpoint in inventory["endpoints"]:
@@ -557,6 +560,11 @@ class _Runtime:
         return dict(self.contexts[context])
 
     async def request(self, endpoint, inputs, context, timeout_is_inconclusive=False):
+        if self.auth is not None:
+            try:
+                await self.auth.ensure(context)
+            except AuthError as exc:
+                raise _Stop(exc.message, "error", exc.reason) from None
         headers = dict(inputs["headers"])
         headers.update({key.lower(): value for key, value in self.headers(context).items()})
         # An explicit empty Cookie header disables HTTPX's shared response cookie jar.
@@ -569,7 +577,20 @@ class _Runtime:
         if inputs["body"] is not _MISSING:
             kwargs["json"] = copy.deepcopy(inputs["body"])
         try:
-            return await self.client.request(endpoint["method"], inputs["url"], **kwargs)
+            response = await self.client.request(endpoint["method"], inputs["url"], **kwargs)
+            if (self.auth is not None and response.status_code == 401
+                    and self.auth.can_refresh_on_401(context)):
+                try:
+                    await self.auth.refresh(context)
+                except AuthError as exc:
+                    raise _Stop(exc.message, "error", exc.reason) from None
+                headers = dict(inputs["headers"])
+                headers.update({key.lower(): value for key, value in self.headers(context).items()})
+                headers.setdefault("cookie", "")
+                kwargs["headers"] = headers
+                response = await self.client.request(endpoint["method"], inputs["url"], **kwargs)
+                self.notes.add("auth_refreshed")
+            return response
         except UnsafeRequest:
             raise _Stop("Request blocked by the safety guard.", "skipped", "safety_blocked") from None
         except httpx.TimeoutException:
@@ -612,7 +633,19 @@ class _Runtime:
             kwargs["json"] = _expand(spec["body"], variables)
         url = self.inventory["base_url"].rstrip("/") + path
         try:
-            return await self.client.request(spec["method"], url, **kwargs)
+            if self.auth is not None:
+                await self.auth.ensure(context)
+                headers.update({key.lower(): value for key, value in self.headers(context).items()})
+                kwargs["headers"] = headers
+            response = await self.client.request(spec["method"], url, **kwargs)
+            if (self.auth is not None and response.status_code == 401
+                    and self.auth.can_refresh_on_401(context)):
+                await self.auth.refresh(context)
+                headers.update({key.lower(): value for key, value in self.headers(context).items()})
+                kwargs["headers"] = headers
+                response = await self.client.request(spec["method"], url, **kwargs)
+                self.notes.add("auth_refreshed")
+            return response
         except UnsafeRequest:
             raise _Stop("Mutation request blocked by the safety guard.", "skipped", "safety_blocked") from None
         except httpx.TimeoutException:
@@ -1335,7 +1368,7 @@ async def run_rules(inventory: dict, rules: list[dict], client,
                     contexts: dict | None = None, variables: dict | None = None,
                     spec_check: str = "strict", allow_mutations: bool = False,
                     allowed_hosts=(), read_only: bool = False,
-                    accept_generated: bool = False) -> list[dict]:
+                    accept_generated: bool = False, auth_manager=None) -> list[dict]:
     """Execute selected rules through an async guarded client; return redacted results.
 
     Invalid rules/context/variable configuration raises ValueError before any HTTP.
@@ -1371,7 +1404,7 @@ async def run_rules(inventory: dict, rules: list[dict], client,
     if (base.scheme not in ("http", "https") or not base.netloc or base.username is not None
             or base.password is not None or base.query or base.fragment):
         raise ValueError("Inventory base_url must be an HTTP(S) URL without credentials/query/fragment")
-    runtime = _Runtime(inventory, client, contexts, variables)
+    runtime = _Runtime(inventory, client, contexts, variables, auth=auth_manager)
     results = []
     for rule in rules:
         for target in rule["target_endpoints"]:
@@ -1465,6 +1498,9 @@ async def run_rules(inventory: dict, rules: list[dict], client,
                         if differential and exc.reason == "timeout":
                             raise _Stop("Primary baseline timed out.", reason="baseline_timeout") from None
                         raise
+                    if baseline.status_code == 401 and runtime.auth is not None:
+                        raise _Stop("Primary baseline returned 401; check the auth configuration.",
+                                    "error", "baseline_unauthorized")
                     if not 200 <= baseline.status_code < 300:
                         raise _Stop("Primary baseline did not return 2xx; forbidden request not sent.",
                                     "error", "baseline_not_2xx")
@@ -1524,4 +1560,7 @@ async def run_rules(inventory: dict, rules: list[dict], client,
                 result.update(status="error", verdict="ERROR", message="Rule execution could not be completed.",
                               reason="execution_error")
             results.append(result)
+    if runtime.notes:
+        for result in results:
+            result.setdefault("note", "auth_refreshed")
     return results

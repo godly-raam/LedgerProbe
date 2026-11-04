@@ -207,12 +207,14 @@ class GuardedClient:
         follow = kwargs.pop("follow_redirects", False)
         if follow not in (False, httpx.USE_CLIENT_DEFAULT):
             raise UnsafeRequest("redirects cannot be enabled")
+        auth_flow = kwargs.pop("auth_flow", False)
         auth = kwargs.pop("auth", httpx.USE_CLIENT_DEFAULT)
         request = self._http.build_request(method, url, **kwargs)
         path = request.url.raw_path.split(b"?", 1)[0].decode("ascii")
         if (
             self._read_only
             and request.method not in {"GET", "HEAD", "OPTIONS"}
+            and not auth_flow
             and (request.method, path) not in self._allowed
         ):
             raise UnsafeRequest(f"read-only policy blocks {request.method} {path}")

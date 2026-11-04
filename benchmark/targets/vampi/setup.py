@@ -88,18 +88,37 @@ def main() -> int:
             raise SystemExit(f"register failed for {username}: {status} {body}")
 
     owner_token = login(base, owner, password)
-    other_token = login(base, other, password)
 
     status, body = call(base, "POST", "/books/v1",
                         {"book_title": book_title, "secret": canary}, owner_token)
     if status != 200:
         raise SystemExit(f"book seed failed: {status} {body}")
 
-    inputs = {
-        "contexts": {
-            "owner": {"Authorization": f"Bearer {owner_token}"},
-            "other": {"Authorization": f"Bearer {other_token}"},
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    password_file = args.out.with_name("staging-secrets.env")
+    password_file.write_text(f"VAMPI_PASSWORD={password}\n", encoding="utf-8")
+    password_file.chmod(0o600)
+    auth = {
+        "schema_version": "ledgerprobe-auth/1",
+        "identities": {
+            name: {
+                "provider": "login_request",
+                "environment": "staging",
+                "params": {
+                    "method": "POST",
+                    "path": "/users/v1/login",
+                    "body": {"username": "{{%s_username}}" % name,
+                             "password_ref": f"file:{password_file}#VAMPI_PASSWORD"},
+                    "token_json_path": "auth_token",
+                    "header_format": "Bearer {token}",
+                },
+            }
+            for name in ("owner", "other")
         },
+    }
+    args.out.with_name("ledgerprobe-auth.yaml").write_text(
+        json.dumps(auth, indent=2) + "\n", encoding="utf-8")
+    inputs = {
         "variables": {
             "owner_username": owner,
             "other_username": other,
@@ -114,7 +133,7 @@ def main() -> int:
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(inputs, indent=2) + "\n", encoding="utf-8")
     args.out.chmod(0o600)
-    print(f"[+] {args.instance}: seeded {owner} / {other}; inputs at {args.out}")
+    print(f"[+] {args.instance}: seeded {owner} / {other}; auth at ledgerprobe-auth.yaml")
     return 0
 
 
