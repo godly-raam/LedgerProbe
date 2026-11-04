@@ -54,7 +54,10 @@ def _prepare(client, request: dict) -> httpx.Request:
     method = request["method"]
     if "url" not in request:
         raise ValueError("synchronized requests require a url")
-    kwargs = {"headers": dict(request.get("headers", {}))}
+    if client._kill_file and __import__("os").path.exists(client._kill_file):
+        raise UnsafeRequest("kill switch is active")
+    headers = {**getattr(client, "_default_headers", {}), **dict(request.get("headers", {}))}
+    kwargs = {"headers": headers}
     if "params" in request:
         kwargs["params"] = request["params"]
     if "json" in request:
@@ -319,7 +322,7 @@ async def _burst_round(client, requests: list[dict], timeout: float) -> dict:
         await barrier.wait()
         stamp = monotonic_ns()
         request = _prepare(client, item)
-        kwargs = {"headers": dict(item.get("headers", {})), "follow_redirects": False, "auth": None}
+        kwargs = {"headers": dict(request.headers), "follow_redirects": False, "auth": None}
         if "params" in item:
             kwargs["params"] = item["params"]
         if "json" in item:
