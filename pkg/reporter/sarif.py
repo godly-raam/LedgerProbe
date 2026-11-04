@@ -58,6 +58,7 @@ def write_sarif(results, path, *, source_uri=None, warnings=()) -> Path:
                 "defaultConfiguration": {"level": _LEVELS[result["severity"]]},
                 "properties": {
                     "security-severity": str(result.get("cvss", {}).get("score", result["cvss_score"])),
+                    "cwe": result.get("cwe"),
                     "tags": ["security", "owasp", "owasp/" + result["owasp_category"]],
                 },
             })
@@ -88,6 +89,9 @@ def write_sarif(results, path, *, source_uri=None, warnings=()) -> Path:
                     "ledgerprobe/v1": result_fingerprint(result),
                 },
             }
+            if result.get("cwe"):
+                finding["taxa"] = [{"id": str(result["cwe"]), "name": f"CWE-{result['cwe']}"}]
+                finding.setdefault("properties", {})["cwe"] = result["cwe"]
             if result.get("status") == "suppressed" and isinstance(result.get("suppression"), dict):
                 finding["suppressions"] = [{
                     "kind": "external",

@@ -48,6 +48,8 @@ def _record(result: dict, *, status: str | None = None) -> dict:
     for key in ("reason", "confidence", "severity"):
         if result.get(key) is not None:
             record[key] = result[key]
+    if result.get("cwe") is not None:
+        record["cwe"] = result["cwe"]
     if result.get("note") is not None:
         record["notes"] = [result["note"]]
     if status in {"failed", "suppressed"}:

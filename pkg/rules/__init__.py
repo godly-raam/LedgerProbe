@@ -22,6 +22,7 @@ from ..auth import AuthError
 from ..guardrails import UnsafeRequest
 from ..cvss import parse_vector, resolve_cvss
 from ..fingerprints import check_type, fingerprint, identity_roles
+from ..cwe import cwe_for
 from .verdict import _typed, _values, evaluate_differential, evaluate_mutation, evaluate_race, evaluate_scoped
 
 __all__ = ["load_rules", "run_rules"]
@@ -1414,6 +1415,7 @@ async def run_rules(inventory: dict, rules: list[dict], client,
             result.update(rule_id=rule["id"], severity=rule["severity"].lower(),
                           path=target["path"], method=target["method"],
                           path_template=target["path"], check_type=selected_type,
+                          cwe=cwe_for(selected_type),
                           identity_roles=roles, cvss=resolve_cvss(rule, selected_type),
                           fingerprint=fingerprint(rule_id=rule["id"], method=target["method"],
                                                   path_template=target["path"],

@@ -162,7 +162,7 @@ class RunRulesTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(set(result), {"rule_id", "name", "severity", "owasp_category", "cvss_score",
                                        "path", "method", "status", "message", "assertions",
                                        "path_template", "check_type", "identity_roles", "cvss",
-                                       "fingerprint"})
+                                       "fingerprint", "cwe"})
 
     async def test_failed_baseline_never_sends_forbidden(self):
         for status in (301, 401, 403, 404, 500):

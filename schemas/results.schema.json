@@ -207,6 +207,7 @@
         "notes": {"type": "array", "items": {"type": "string"}},
         "confidence": {"enum": ["high", "reduced"]},
         "severity": {"enum": ["info", "low", "medium", "high", "critical"]},
+        "cwe": {"type": "integer", "minimum": 1},
         "baseline_status": {"enum": ["new", "unchanged"]}
       }
     },
@@ -227,6 +228,7 @@
         "notes": {"type": "array", "items": {"type": "string"}},
         "confidence": {"enum": ["high", "reduced"]},
         "severity": {"enum": ["info", "low", "medium", "high", "critical"]},
+        "cwe": {"type": "integer", "minimum": 1},
         "cvss": {"$ref": "#/$defs/cvss"},
         "evidence": {"$ref": "#/$defs/evidence"},
         "baseline_status": {"enum": ["new", "unchanged"]},

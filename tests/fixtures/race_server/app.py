@@ -88,6 +88,8 @@ async def wallet_spend(request: Request):
     if not amount:
         return JSONResponse({"error": "bad amount"}, status_code=400)
     if profile(request) == "wallet_race_vulnerable_narrow":
+        await asyncio.sleep(0)
+    if profile(request) == "wallet_race_vulnerable_narrow_deterministic":
         app_state.narrow_waiters += 1
         if app_state.narrow_waiters >= 10:
             app_state.narrow_release.set()
@@ -95,7 +97,8 @@ async def wallet_spend(request: Request):
             await asyncio.wait_for(app_state.narrow_release.wait(), timeout=0.2)
         except asyncio.TimeoutError:
             pass
-    if profile(request) in {"wallet_race_vulnerable", "wallet_race_vulnerable_narrow"}:
+    if profile(request) in {"wallet_race_vulnerable", "wallet_race_vulnerable_narrow",
+                            "wallet_race_vulnerable_narrow_deterministic"}:
         if app_state.balance >= amount:
             await asyncio.sleep(0.03 if profile(request) == "wallet_race_vulnerable" else 0)
             app_state.balance -= amount
