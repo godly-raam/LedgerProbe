@@ -22,6 +22,8 @@ from urllib.parse import urlsplit, urljoin
 import httpx
 import yaml
 
+from .guardrails import AUTH_FLOW
+
 __all__ = [
     "AuthError", "AuthManager", "Secret", "SecretResolver",
     "load_auth_config", "redact", "register_secret",
@@ -554,7 +556,7 @@ class AuthManager:
                 "POST", params["token_url"],
                 data={"grant_type": "client_credentials", "scope": params["scope"]},
                 auth=httpx.BasicAuth(client_id.reveal(), client_secret.reveal()),
-                headers={"Accept": "application/json"}, auth_flow=True,
+                headers={"Accept": "application/json"}, auth_flow=AUTH_FLOW,
             )
         except httpx.HTTPError as exc:
             raise AuthError("auth_failed", f"token request failed ({type(exc).__name__})") from None
@@ -593,7 +595,7 @@ class AuthManager:
         try:
             response = await self.client.request(
                 params["method"], url, json=body, headers={"Accept": "application/json"},
-                auth_flow=True,
+                auth_flow=AUTH_FLOW,
             )
         except httpx.HTTPError as exc:
             raise AuthError("auth_failed", f"login request failed ({type(exc).__name__})") from None
