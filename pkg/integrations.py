@@ -1022,15 +1022,17 @@ def _digest_text(run: TicketRun, ci_url: str | None) -> str:
     return "\n".join(lines)
 
 
-async def _deduplicate(tracker: Tracker, tickets: list[Ticket], run: TicketRun) -> Ticket | None:
+async def _deduplicate(tracker: Tracker, tickets: list[Ticket], run: TicketRun,
+                       *, write: bool = True) -> Ticket | None:
     if not tickets:
         return None
     ordered = sorted(tickets, key=lambda item: item.created_at)
     oldest = ordered[0]
     for newer in ordered[1:]:
         try:
-            await tracker.comment(newer, f"Duplicate of {oldest.key}: {oldest.url}")
-            await tracker.add_label(newer, "lp-duplicate")
+            if write:
+                await tracker.comment(newer, f"Duplicate of {oldest.key}: {oldest.url}")
+                await tracker.add_label(newer, "lp-duplicate")
             run.warnings.append(f"duplicate_ticket:{newer.key}")
         except TrackerError as exc:
             run.errors.append(str(exc))
@@ -1058,11 +1060,11 @@ async def process_tickets(results: list[dict], *, config: IntegrationsConfig, ta
                           transport=None, sleep=None, now: datetime | None = None,
                           ci_url: str | None = None, slack_transport=None) -> TicketRun:
     """Plan and optionally execute lifecycle actions; never part of scan verdicts."""
-    if mode not in {"dry-run", "apply"}:
-        raise ValueError("ticket mode must be dry-run or apply")
+    if mode not in {"dry-run", "plan", "apply"}:
+        raise ValueError("ticket mode must be dry-run, plan or apply")
     now = now or datetime.now(timezone.utc)
     run = TicketRun()
-    owns_tracker = tracker is None and mode == "apply"
+    owns_tracker = tracker is None and mode in {"plan", "apply"}
     if tracker is None:
         tracker = FakeTracker(now=now) if mode == "dry-run" else build_tracker(
             config, transport=transport, sleep=sleep, now=now)
@@ -1078,7 +1080,7 @@ async def process_tickets(results: list[dict], *, config: IntegrationsConfig, ta
         for fp, result in by_fingerprint.items():
             try:
                 tickets = await tracker.find_all(fp, target_label)
-                ticket = await _deduplicate(tracker, tickets, run)
+                ticket = await _deduplicate(tracker, tickets, run, write=mode == "apply")
             except TrackerError as exc:
                 run.errors.append(str(exc))
                 lookup_failed.add(fp)
@@ -1161,7 +1163,7 @@ async def process_tickets(results: list[dict], *, config: IntegrationsConfig, ta
                     # same key. Keep the oldest and mark any newer ticket duplicate.
                     try:
                         siblings = await tracker.find_all(draft["fingerprint"], target_label)
-                        kept = await _deduplicate(tracker, siblings, run)
+                        kept = await _deduplicate(tracker, siblings, run, write=mode == "apply")
                         if kept is not None:
                             ticket = kept
                     except TrackerError as exc:
@@ -1244,8 +1246,10 @@ async def _execute_comment(tracker: Tracker, ticket: Ticket, text: str, mode: st
             state = parse_state(text)
             if state:
                 ticket.metadata = state
-            else:
-                ticket.metadata = old
+        elif mode == "plan":
+            print("[tickets] plan mode: read-only tracker lookups; no writes")
+        else:
+            ticket.metadata = old
         run.actions.append({"kind": "comment", "fingerprint": fingerprint,
                             "rule_id": result.get("rule_id"), "ticket": ticket.key,
                             "url": ticket.url})

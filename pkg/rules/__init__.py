@@ -225,7 +225,7 @@ def _race_spec(value):
         raise ValueError("unique idempotency requires a ledger invariant")
 
 
-def _validate_rules(rules, *, require_mutating=True):
+def _validate_rules(rules, *, require_mutating=True, accept_generated=False):
     if not isinstance(rules, list):
         raise ValueError("Rules must be a list")
     ids = set()
@@ -234,8 +234,20 @@ def _validate_rules(rules, *, require_mutating=True):
                      "target_endpoints", "auth_contexts", "assertions", "parameters", "body",
                      "acceptable_status", "leak_detection", "controls", "confirm", "pagination",
                      "require_primary_canary", "scope", "require_owner_canary_in_baseline", "spec_check",
-                     "mutating", "verify", "restore", "race", "remediation"},
+                     "mutating", "verify", "restore", "race", "remediation",
+                     "generated_from", "review_required", "scope_confidence", "disabled"},
               {"id", "name", "severity", "owasp_category", "cvss_score", "target_endpoints"})
+        if "generated_from" in rule and rule["generated_from"] not in {"har", "postman", "mitm"}:
+            raise ValueError("generated_from must be har, postman or mitm")
+        if "review_required" in rule and type(rule["review_required"]) is not bool:
+            raise ValueError("review_required must be boolean")
+        if rule.get("review_required") is True and not accept_generated:
+            raise ValueError("Generated rules require review; rerun with --accept-generated")
+        if "scope_confidence" in rule and rule["scope_confidence"] not in {"high", "medium", "low"}:
+            raise ValueError("scope_confidence must be high, medium or low")
+        disabled = rule.get("disabled", False)
+        if type(disabled) is not bool:
+            raise ValueError("disabled must be boolean")
         if "remediation" in rule:
             _text(rule["remediation"])
         differential = "leak_detection" in rule
@@ -277,6 +289,8 @@ def _validate_rules(rules, *, require_mutating=True):
             _path(target["path"])
             if not isinstance(target["method"], str) or target["method"] not in _METHODS:
                 raise ValueError("Methods must be uppercase HTTP methods")
+        if disabled:
+            continue
         non_safe = any(target["method"] not in _SAFE_METHODS for target in targets)
         if non_safe and not mutating and require_mutating:
             raise ValueError("Non-safe methods require mutating: true")
@@ -405,7 +419,7 @@ def _validate_rules(rules, *, require_mutating=True):
             raise ValueError("Mutating rules require distinct primary and forbidden contexts")
 
 
-def load_rules(paths: Iterable[str]) -> list[dict[str, Any]]:
+def load_rules(paths: Iterable[str], *, accept_generated: bool = False) -> list[dict[str, Any]]:
     """Load UTF-8 YAML files; raise ValueError on any invalid/duplicate rule."""
     if isinstance(paths, (str, bytes)):
         raise ValueError("paths must be an iterable of file names")
@@ -425,7 +439,7 @@ def load_rules(paths: Iterable[str]) -> list[dict[str, Any]]:
         if not isinstance(document, list):
             raise ValueError("Rule file must contain a rule, a list, or a rules mapping")
         rules.extend(document)
-    _validate_rules(rules, require_mutating=True)
+    _validate_rules(rules, require_mutating=True, accept_generated=accept_generated)
     for rule in rules:
         rule["severity"] = rule["severity"].lower()
     return rules
@@ -1320,13 +1334,14 @@ async def _differential_result(runtime, endpoint, inputs, forbidden, rule, basel
 async def run_rules(inventory: dict, rules: list[dict], client,
                     contexts: dict | None = None, variables: dict | None = None,
                     spec_check: str = "strict", allow_mutations: bool = False,
-                    allowed_hosts=(), read_only: bool = False) -> list[dict]:
+                    allowed_hosts=(), read_only: bool = False,
+                    accept_generated: bool = False) -> list[dict]:
     """Execute selected rules through an async guarded client; return redacted results.
 
     Invalid rules/context/variable configuration raises ValueError before any HTTP.
     Per-endpoint resolution, transport and baseline failures become result records.
     """
-    _validate_rules(rules, require_mutating=False)
+    _validate_rules(rules, require_mutating=False, accept_generated=accept_generated)
     if spec_check not in {"strict", "warn"}:
         raise ValueError("spec_check must be strict or warn")
     if not isinstance(allow_mutations, bool):
@@ -1390,8 +1405,16 @@ async def run_rules(inventory: dict, rules: list[dict], client,
                     if len(matches) != 1:
                         raise _Stop("Selected endpoint is ambiguous in inventory.")
                     endpoint = matches[0]
+                    if endpoint.get("traffic_only"):
+                        spec_drift = "traffic inventory: " + target["path"]
                 if spec_drift:
                     result["spec_drift"] = spec_drift
+                if rule.get("disabled"):
+                    result.update(status="skipped", verdict="SKIPPED",
+                                  reason="rule_disabled",
+                                  message="Generated rule is disabled; review it and add restore/verify before enabling.")
+                    results.append(result)
+                    continue
                 differential = "leak_detection" in rule
                 comparison = _differential_config(rule, variables) if differential else None
                 auth = rule.get("auth_contexts", {})

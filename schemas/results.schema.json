@@ -58,6 +58,47 @@
     "skipped": {"type": "array", "items": {"$ref": "#/$defs/check"}},
     "errors": {"type": "array", "items": {"$ref": "#/$defs/check"}},
     "warnings": {"type": "array", "items": {"$ref": "#/$defs/warning"}},
+    "drift": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["counts", "undocumented", "unobserved", "parameter_mismatches", "method_mismatches"],
+      "properties": {
+        "counts": {
+          "type": "object", "additionalProperties": false,
+          "required": ["undocumented", "unobserved", "parameter_mismatches", "method_mismatches"],
+          "properties": {
+            "undocumented": {"type": "integer", "minimum": 0},
+            "unobserved": {"type": "integer", "minimum": 0},
+            "parameter_mismatches": {"type": "integer", "minimum": 0},
+            "method_mismatches": {"type": "integer", "minimum": 0}
+          }
+        },
+        "undocumented": {"type": "array", "items": {"$ref": "#/$defs/drift_route"}},
+        "unobserved": {"type": "array", "items": {"$ref": "#/$defs/drift_route"}},
+        "parameter_mismatches": {
+          "type": "array", "items": {
+            "type": "object", "additionalProperties": false,
+            "required": ["method", "path", "spec", "traffic"],
+            "properties": {
+              "method": {"type": "string"}, "path": {"type": "string"},
+              "spec": {"type": "array", "items": {"type": "string"}},
+              "traffic": {"type": "array", "items": {"type": "string"}}
+            }
+          }
+        },
+        "method_mismatches": {
+          "type": "array", "items": {
+            "type": "object", "additionalProperties": false,
+            "required": ["path", "spec", "traffic"],
+            "properties": {
+              "path": {"type": "string"},
+              "spec": {"type": "array", "items": {"type": "string"}},
+              "traffic": {"type": "array", "items": {"type": "string"}}
+            }
+          }
+        }
+      }
+    },
     "baseline": {
       "type": "object",
       "additionalProperties": false,
@@ -70,6 +111,11 @@
     }
   },
   "$defs": {
+    "drift_route": {
+      "type": "object", "additionalProperties": false,
+      "required": ["method", "path"],
+      "properties": {"method": {"type": "string"}, "path": {"type": "string"}}
+    },
     "fingerprint": {"type": "string", "pattern": "^lp1:[0-9a-f]{64}$"},
     "check_type": {
       "enum": ["bola", "state_change", "race", "unauthenticated_access", "caller_scope", "shared_scope"]

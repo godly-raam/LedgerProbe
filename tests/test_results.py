@@ -141,6 +141,23 @@ def test_schema_document_validates_and_contains_no_secret_values(tmp_path):
     VALIDATOR.validate(json.loads((tmp_path / "results.json").read_text()))
 
 
+def test_schema_accepts_optional_drift_section():
+    document = build_document(
+        [], target="https://target.test", modes={"read_only": True, "spec_check": "warn"},
+        timestamp="2026-11-03T00:00:00+00:00",
+        drift={
+            "counts": {"undocumented": 1, "unobserved": 1,
+                       "parameter_mismatches": 0, "method_mismatches": 0},
+            "undocumented": [{"method": "GET", "path": "/api/v1/traffic-only"}],
+            "unobserved": [{"method": "GET", "path": "/api/v1/spec-only"}],
+            "parameter_mismatches": [], "method_mismatches": [],
+        },
+    )
+    VALIDATOR.validate(document)
+    assert document["schema_version"] == SCHEMA_VERSION
+    assert document["drift"]["counts"]["undocumented"] == 1
+
+
 def test_json_sarif_and_junit_emit_the_same_fingerprint(tmp_path):
     result = _result()
     path = tmp_path / "results.json"

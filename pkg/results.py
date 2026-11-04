@@ -70,7 +70,7 @@ def _warning(value) -> dict:
 
 
 def build_document(results, *, target: str, modes: dict, warnings=(), baseline=None,
-                   suppressions=None, timestamp=None) -> dict:
+                   suppressions=None, timestamp=None, drift=None) -> dict:
     results = list(results)
     counts = Counter(result.get("status") for result in results)
     for key in _STATUSES:
@@ -120,6 +120,8 @@ def build_document(results, *, target: str, modes: dict, warnings=(), baseline=N
             "suppressions_expired": suppressions.get("expired", 0),
             "stale_suppressions": suppressions.get("stale", 0),
         })
+    if drift is not None:
+        document["drift"] = drift
     return document
 
 

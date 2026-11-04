@@ -3,7 +3,9 @@
 LedgerProbe's scan path stays independent of ticketing. Scan reports are written
 before any tracker or Slack call. Tracker failures never change findings or
 verdicts. Ticket mode defaults to **dry-run**, which prints planned actions with
-only fingerprints and rule IDs and performs no network I/O.
+only fingerprints and rule IDs and performs no network I/O. **plan** performs
+real read-only lookups against the configured tracker and prints the same
+create/comment/reopen/noop actions without writing.
 
 ## Configuration
 
@@ -113,6 +115,11 @@ are written.
 python ledgerprobe.py --spec openapi.yaml --rules rulesets/abac_isolation.yaml \
   --tickets dry-run --integrations ledgerprobe-integrations.yaml
 
+# Real tracker lookups, but no writes: Jira only GETs its search endpoint;
+# Linear sends GraphQL query operations and never a mutation.
+python ledgerprobe.py --spec openapi.yaml --rules rulesets/abac_isolation.yaml \
+  --tickets plan --integrations ledgerprobe-integrations.yaml
+
 # Explicitly permits tracker and Slack writes.
 python ledgerprobe.py --spec openapi.yaml --rules rulesets/abac_isolation.yaml \
   --tickets apply --integrations ledgerprobe-integrations.yaml \
@@ -122,15 +129,17 @@ python ledgerprobe.py --spec openapi.yaml --rules rulesets/abac_isolation.yaml \
 python ledgerprobe.py --spec openapi.yaml --rules rulesets/abac_isolation.yaml --tickets off
 ```
 
-GitHub Actions should use dry-run on pull requests and apply only on `main`:
+`plan` is the review-safe CI mode: it exercises the actual tracker deduplication
+path but cannot create, comment, reopen, label, transition, or send Slack.
+GitHub Actions should use plan on pull requests and apply only on `main`:
 
 ```yaml
-- name: LedgerProbe ticket dry-run
+- name: LedgerProbe ticket plan
   if: github.event_name == 'pull_request'
   env:
     JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
     JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
-  run: python ledgerprobe.py --spec openapi.yaml --rules rulesets/abac_isolation.yaml --tickets dry-run
+  run: python ledgerprobe.py --spec openapi.yaml --rules rulesets/abac_isolation.yaml --tickets plan
 
 - name: LedgerProbe ticket apply
   if: github.ref == 'refs/heads/main'
