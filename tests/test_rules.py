@@ -84,7 +84,7 @@ class LoadRulesTests(unittest.TestCase):
             {"cvss_score": True}, {"cvss_score": "8.1"}, {"cvss_score": -1},
             {"cvss_score": 11}, {"cvss_score": float("nan")}, {"cvss_score": float("inf")},
                         {"cvss_score": 10 ** 1000},
-            {"extra": "unknown"}, {"target_endpoints": []},
+            {"extra": "unknown"}, {"auth_flow": True}, {"target_endpoints": []},
             {"target_endpoints": [{"path": "/items", "method": "get"}]},
             {"target_endpoints": [{"path": "https://evil.test", "method": "GET"}]},
             {"target_endpoints": [{"path": "/../items", "method": "GET"}]},

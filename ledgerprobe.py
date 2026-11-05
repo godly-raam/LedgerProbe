@@ -11,9 +11,12 @@ from collections import Counter
 from pathlib import Path
 from urllib.parse import quote, urlsplit
 
+from pkg.version import __version__
+
 import httpx
 
 from pkg.auth import AuthManager, load_auth_config
+from pkg.dojo import write_export as write_defectdojo
 from pkg.guardrails import GuardedClient
 from pkg.integrations import TrackerError, load_integrations, process_tickets
 from pkg.parser import load_inventory
@@ -53,6 +56,7 @@ def mutation(value: str) -> tuple[str, str]:
 
 def arguments(argv=None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="LedgerProbe spec-driven security automation")
+    parser.add_argument("--version", action="version", version="LedgerProbe " + __version__)
     parser.add_argument("--spec", required=True, help="OpenAPI/Swagger or Postman 2.1 file/URL")
     parser.add_argument("--rules", nargs="+", required=True, help="YAML policy files")
     parser.add_argument("--base-url", help="explicitly override every spec server with this target")
@@ -63,7 +67,9 @@ def arguments(argv=None) -> argparse.Namespace:
                         help="reject legacy static contexts in inputs.json")
     parser.add_argument("--sarif", type=Path, default=Path("results.sarif"))
     parser.add_argument("--junit", type=Path, help="optional JUnit XML output")
-    parser.add_argument("--json", type=Path, help="optional versioned JSON results output")
+    parser.add_argument("--json", type=Path, help="optional versioned JSON results output (required output path for --format defectdojo)")
+    parser.add_argument("--format", choices=("results", "defectdojo"), default="results",
+                        help="JSON output format; reports remain SARIF/JUnit")
     parser.add_argument("--suppressions", type=Path, help="suppression YAML (default: .ledgerprobe-suppressions.yaml when present)")
     parser.add_argument("--fail-on-stale", action="store_true",
                         help="return exit 1 when a suppression fingerprint was not produced")
@@ -201,7 +207,11 @@ async def execute(args: argparse.Namespace) -> int:
     write_sarif(report_results, args.sarif, source_uri=source_uri, warnings=warnings)
     if args.junit:
         write_junit(report_results, args.junit, warnings=warnings)
-    if args.json:
+    if args.format == "defectdojo" and args.json is None:
+        raise ValueError("--format defectdojo requires --json OUTPUT")
+    if args.json and args.format == "defectdojo":
+        write_defectdojo(results, args.json, target=inventory["base_url"])
+    elif args.json:
         document = build_document(results, target=inventory["base_url"],
                                   modes={"read_only": args.read_only,
                                          "allow_mutations": args.allow_mutations,

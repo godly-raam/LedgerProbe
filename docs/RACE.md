@@ -138,15 +138,18 @@ report for the fixture's balance value and identity tokens.
 ## Detection study
 
 Twenty fresh runs per mode against each wallet fixture, with 10 requests and 5
-rounds per run (on the local loopback fixture). The wide fixture has a 30 ms
-check/write gap; the narrow fixture yields once with `await asyncio.sleep(0)`:
+rounds per run (on the local loopback fixture). Every `wide` row below used
+`wallet_race_vulnerable` (a 30 ms check/write gap); every `narrow` row used the
+yield-only `wallet_race_vulnerable_narrow` (`await asyncio.sleep(0)`, with no
+barrier). The separate `wallet_race_vulnerable_narrow_deterministic` profile is
+for CI determinism only and was not used for this study:
 
 | Fixture | Mode | FAIL runs | FAIL rate | Median spread (ms) | Rounds to first hit |
 | --- | --- | ---: | ---: | ---: | --- |
-| wide (30 ms) | `burst` | 20/20 | 100% | 4.364330 | 1 |
-| wide (30 ms) | `last_byte` | 20/20 | 100% | 0.158460 | 1 |
-| narrow (yield) | `burst` | 0/20 | 0% | 4.181949 | none |
-| narrow (yield) | `last_byte` | 20/20 | 100% | 0.176219 | 1 |
+| wide (30 ms) | `burst` | 20/20 | 100% | 2.335522 | 1 |
+| wide (30 ms) | `last_byte` | 20/20 | 100% | 0.071160 | 1 |
+| narrow (yield-only) | `burst` | 0/20 | 0% | 2.359189 | none |
+| narrow (yield-only) | `last_byte` | 20/20 | 100% | 0.067570 | 1 |
 | n/a | `h2_single_packet` | not tested (h2 unavailable) | n/a | n/a | n/a |
 
 The h2 row is **not an h2 measurement**. The optional `h2` package was not
@@ -157,9 +160,10 @@ unverified against a real HTTP/2 server.
 
 The honest result changes with the window. On the wide fixture, `burst` and
 `last_byte` both detected the bug 20/20; `last_byte` reduced median release
-spread from about 4.36 ms to 0.16 ms, but the 30 ms gap gave burst enough time to
-win anyway. On the narrow fixture, `burst` detected **0/20** while `last_byte`
-detected **20/20**, with first hits in rounds 1-4. Release spread alone is not a
+spread from 2.34 ms to 0.07 ms, but the 30 ms gap gave burst enough time to
+win anyway. On the yield-only narrow fixture, `burst` detected **0/20** while
+`last_byte` detected **20/20**, with first hits in rounds 1-5. Burst still does
+not detect the yield-only narrow-window fixture. Release spread alone is not a
 detection guarantee, but this is the evidence that the synchronized mode is
 needed for a small check/write window. These are local fixture results, not a
 general detection-rate estimate.

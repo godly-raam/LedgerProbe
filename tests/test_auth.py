@@ -231,6 +231,25 @@ class AuthProviderTests(unittest.IsolatedAsyncioTestCase):
         finally:
             os.environ.pop("AUTH_TEST_PASSWORD", None)
 
+    async def test_login_request_extracts_header_and_cookie_tokens(self):
+        os.environ["AUTH_TEST_PASSWORD"] = "PASS-7391528"
+        try:
+            for extractor, headers in (
+                ("token_header", {"X-Auth-Token": "HEADER-TOKEN-7391528"}),
+                ("token_cookie", {"set-cookie": "session=COOKIE-TOKEN-7391528; HttpOnly"}),
+            ):
+                identity = _login(expiry=False)
+                identity["params"].pop("token_json_path")
+                identity["params"][extractor] = "X-Auth-Token" if extractor == "token_header" else "session"
+                async with GuardedClient(transport=httpx.MockTransport(
+                        lambda request: httpx.Response(200, headers=headers))) as client:
+                    manager = AuthManager(_config(identity), {"owner": "alice"}, "https://target.test", client)
+                    await manager.initialize()
+                    expected = "HEADER-TOKEN-7391528" if extractor == "token_header" else "COOKIE-TOKEN-7391528"
+                    self.assertEqual(manager.headers("owner")["Authorization"], "Bearer " + expected)
+        finally:
+            os.environ.pop("AUTH_TEST_PASSWORD", None)
+
     async def test_script_provider_and_timeout_and_cap(self):
         script = {
             "provider": "script", "environment": "lab",

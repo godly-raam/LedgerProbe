@@ -372,6 +372,17 @@ JUnit represents INCONCLUSIVE as skipped with a message/reason. SARIF emits a
 `level: note`, `kind: review` result without security-rule severity metadata,
 not a security alert. HIGH/CRITICAL webhooks still send only FAIL findings.
 
+### CWE classification and exports
+
+Results, SARIF properties/taxa, and DefectDojo Generic Findings Import records carry
+one deterministic CWE: object/BOLA access, state change by another identity, and
+caller/shared-scope leaks map to CWE-639; unauthenticated access maps to CWE-306;
+and race checks map to CWE-362. DefectDojo exports only FAIL or suppressed findings.
+A suppressed finding is emitted as `active: false, false_p: true`; PASS,
+INCONCLUSIVE, and ERROR are deliberately not DefectDojo findings. The exporter uses
+only path templates, fingerprints, rule metadata, CVSS, CWE, and remediation; it
+never includes evidence values or expanded object IDs.
+
 ### Evidence privacy and compatibility
 
 Differential evidence contains only counts, hashes, HTTP statuses, and boolean

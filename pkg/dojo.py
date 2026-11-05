@@ -6,7 +6,7 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .auth import SecretResolver
+from .auth import SecretResolver, redact
 from .cwe import cwe_for
 from .fingerprints import result_fingerprint
 
@@ -28,8 +28,10 @@ def build_export(results, *, target, when=None):
             continue
         check = result.get("check_type", "bola")
         output.append({
-            "title": result.get("name") or result.get("rule_id", "LedgerProbe finding"),
-            "description": str(result.get("message") or result.get("name") or "LedgerProbe finding"),
+            "title": "LedgerProbe: " + redact(str(result.get("rule_id", "finding"))),
+            "description": redact("LedgerProbe finding on " + str(result.get("method", "GET")) + " "
+                                  + str(result.get("path_template") or result.get("path", "/"))
+                                  + "; evidence values are redacted."),
             "severity": _severity(result),
             "mitigation": result.get("remediation") or "Review the authorization rule and apply the documented remediation.",
             "date": day,
@@ -46,8 +48,15 @@ def build_export(results, *, target, when=None):
 
 
 def write_export(results, path, *, target):
+    payload = build_export(results, target=target)
+    try:
+        import jsonschema
+        schema_path = Path(__file__).parents[1] / "schemas" / "defectdojo.generic.schema.json"
+        jsonschema.Draft202012Validator(json.loads(schema_path.read_text(encoding="utf-8"))).validate(payload)
+    except ImportError:
+        pass  # jsonschema is a development-only validation dependency
     path = Path(path)
-    path.write_text(json.dumps(build_export(results, target=target), indent=2) + "\n", encoding="utf-8")
+    path.write_text(json.dumps(payload, indent=2, ensure_ascii=True, allow_nan=False) + "\n", encoding="utf-8")
     return path
 
 

@@ -10,9 +10,10 @@ from pathlib import Path
 from .cvss import DEFAULT_VECTORS, rating
 from .fingerprints import result_fingerprint
 from .reporter._evidence import result_properties
+from .version import __version__
 
 SCHEMA_VERSION = "ledgerprobe-results/1"
-TOOL_VERSION = "1.1.0"
+TOOL_VERSION = __version__
 _STATUSES = {"passed", "failed", "inconclusive", "skipped", "error", "suppressed"}
 
 

@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ledgerprobe"
+dynamic = ["version"]
+description = "Specification-driven API security checks"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "httpx>=0.27,<1.0",
+  "PyYAML>=6.0,<7",
+  "openapi-spec-validator>=0.7.2,<0.8",
+]
+
+[project.optional-dependencies]
+h2 = ["h2>=4.1,<5"]
+aws = ["boto3>=1.34,<2"]
+mitm = ["mitmproxy>=10,<12"]
+
+[project.scripts]
+ledgerprobe = "ledgerprobe:main"
+
+[tool.setuptools]
+py-modules = ["ledgerprobe"]
+
+[tool.setuptools.dynamic]
+version = {attr = "pkg.version.__version__"}
+
+[tool.setuptools.packages.find]
+include = ["pkg*"]

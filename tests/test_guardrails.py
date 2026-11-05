@@ -117,6 +117,18 @@ def test_httpx_parameters_verbs_and_context_close():
     run(scenario())
 
 
+def test_auth_flow_marker_requires_internal_sentinel_and_read_only_still_blocks_rule_values():
+    async def scenario():
+        seen = []
+        async with GuardedClient("https://bank.test", max_rps=1e9, read_only=True,
+                                 transport=httpx.MockTransport(lambda request: (seen.append(request), httpx.Response(200))[1])) as client:
+            for value in (True, "AUTH_FLOW", object(), None):
+                with pytest.raises(UnsafeRequest):
+                    await client.post("/rule-defined", auth_flow=value)
+            assert not seen
+    run(scenario())
+
+
 def test_read_only_exact_resolved_paths_and_no_redirects():
     async def scenario():
         seen = []

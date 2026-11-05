@@ -89,7 +89,9 @@ params:
 This covers VAmPI/crAPI-style login responses. A 400, 401, or 403 from the
 login endpoint fails fast with `auth_failed`; there is no retry loop and no
 finding is emitted. At most three login/token attempts are made per identity
-per run.
+per run. Login/token requests can have side effects such as OTP/SMS cost, user
+notifications, account lockout, and session creation: point them only at
+dedicated test identities in staging.
 
 ### Script escape hatch for OTP and device-bound flows
 
@@ -122,7 +124,7 @@ a real customer's phone.
 | `env:NAME` | Environment variable |
 | `file:/path#key` | JSON object key or dotenv key; POSIX files readable by group/other are refused |
 | `vault:<path>#<field>` | HashiCorp Vault KV v2; requires `VAULT_ADDR` and `VAULT_TOKEN` |
-| `aws:<secret-id>#<json-key>` | AWS Secrets Manager; optional `ledgerprobe[aws]` extra (boto3) |
+| `aws:<secret-id>#<json-key>` | AWS Secrets Manager; optional `ledgerprobe[aws]` extra (boto3), implemented but unverified against AWS |
 
 `Secret` objects render as `***` for `repr`, `str`, f-strings, formatting, and
 JSON serialization. Raw values are reachable only through `.reveal()` at the
