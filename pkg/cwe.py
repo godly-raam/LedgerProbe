@@ -8,6 +8,9 @@ CWE_BY_CHECK = {
     "caller_scope": 639,
     "shared_scope": 639,
     "race": 362,
+    "bfla": 285,
+    "mass_assignment": 915,
+    "business_limit": 840,
 }
 
 

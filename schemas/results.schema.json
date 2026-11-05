@@ -118,7 +118,7 @@
     },
     "fingerprint": {"type": "string", "pattern": "^lp1:[0-9a-f]{64}$"},
     "check_type": {
-      "enum": ["bola", "state_change", "race", "unauthenticated_access", "caller_scope", "shared_scope"]
+      "enum": ["bola", "state_change", "race", "unauthenticated_access", "caller_scope", "shared_scope", "bfla", "mass_assignment", "business_limit"]
     },
     "cvss": {
       "type": "object",
@@ -136,6 +136,10 @@
       "additionalProperties": false,
       "properties": {
         "overlap_count": {"type": "integer", "minimum": 0},
+        "fields_injected": {"type": "integer", "minimum": 0},
+        "fields_confirmed": {"type": "integer", "minimum": 0},
+        "ledger_changed": {"type": "boolean"},
+        "case": {"type": "string"},
         "confirm_runs": {"type": "integer", "minimum": 0},
         "pages_walked": {"type": "integer", "minimum": 0},
         "mutation_status": {"type": ["integer", "null"]},

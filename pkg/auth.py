@@ -92,6 +92,17 @@ def redact(value) -> str:
     return _REDACTOR.redact(value)
 
 
+def redact_data(value):
+    """Redact strings recursively while preserving JSON-compatible structures."""
+    if isinstance(value, str):
+        return redact(value)
+    if isinstance(value, dict):
+        return {redact_data(key): redact_data(child) for key, child in value.items()}
+    if isinstance(value, list):
+        return [redact_data(child) for child in value]
+    return value
+
+
 class Secret:
     """An in-memory secret whose normal representations are always ``***``."""
 

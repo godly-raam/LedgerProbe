@@ -35,7 +35,6 @@ ledgerprobe_verdict_count{verdict="FAIL"} 2
 ledgerprobe_inconclusive_ratio 0.1
 ledgerprobe_run_duration_seconds 4.2
 ledgerprobe_tracker_errors_total 0
-ledgerprobe_auth_errors_total 0
 ```
 
 Use a per-run temporary file and atomically move it into the collector directory.

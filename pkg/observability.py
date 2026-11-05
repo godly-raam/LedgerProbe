@@ -7,7 +7,7 @@ from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .auth import redact
+from .auth import redact, redact_data
 from .fingerprints import result_fingerprint
 
 REQUIRED = ("ts", "level", "event", "run_id", "rule_id", "fingerprint", "verdict",
@@ -27,7 +27,7 @@ def log_event(run_id, event, *, target, tool_version, result=None, stream=None,
         "path_template": redact(result.get("path_template", result.get("path", ""))),
     }
     if extra:
-        record.update({key: redact(value) for key, value in extra.items()})
+        record.update({key: redact_data(value) for key, value in extra.items()})
     (stream or sys.stdout).write(json.dumps(record, sort_keys=True) + "\n")
     return record
 
@@ -43,8 +43,7 @@ def metrics_text(results, *, duration_seconds, tracker_errors=0, auth_errors=0):
               "# TYPE ledgerprobe_inconclusive_ratio gauge",
               f"ledgerprobe_inconclusive_ratio {inconclusive / max(1, len(results))}",
               f"ledgerprobe_run_duration_seconds {float(duration_seconds)}",
-              f"ledgerprobe_tracker_errors_total {int(tracker_errors)}",
-              f"ledgerprobe_auth_errors_total {int(auth_errors)}"]
+              f"ledgerprobe_tracker_errors_total {int(tracker_errors)}"]
     return "\n".join(lines) + "\n"
 
 
@@ -59,5 +58,6 @@ def github_summary(document):
              f"Failed **{summary.get('failed', 0)}** · Inconclusive **{summary.get('inconclusive', 0)}**",
              "", "| Rule | Fingerprint | Status |", "| --- | --- | --- |"]
     for finding in document.get("findings", []):
-        lines.append(f"| `{finding.get('rule_id', '')}` | `{finding.get('fingerprint', '')}` | {finding.get('status', '')} |")
+        status = finding.get("status") or str(finding.get("verdict", "")).lower()
+        lines.append(f"| `{finding.get('rule_id', '')}` | `{finding.get('fingerprint', '')}` | {status} |")
     return "\n".join(lines) + "\n"

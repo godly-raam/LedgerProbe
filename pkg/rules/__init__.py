@@ -237,6 +237,8 @@ def _validate_rules(rules, *, require_mutating=True, accept_generated=False):
                      "acceptable_status", "leak_detection", "controls", "confirm", "pagination",
                      "require_primary_canary", "scope", "require_owner_canary_in_baseline", "spec_check",
                      "mutating", "verify", "restore", "race", "remediation",
+                     "check", "privileged", "unprivileged", "request", "inject",
+                     "readback", "ledger", "limits", "cases", "_case",
                      "generated_from", "review_required", "scope_confidence", "disabled"},
               {"id", "name", "severity", "owasp_category", "cvss_score", "target_endpoints"})
         if "generated_from" in rule and rule["generated_from"] not in {"har", "postman", "mitm"}:
@@ -252,6 +254,32 @@ def _validate_rules(rules, *, require_mutating=True, accept_generated=False):
             raise ValueError("disabled must be boolean")
         if "remediation" in rule:
             _text(rule["remediation"])
+        if "check" in rule and rule["check"] not in {"bfla", "mass_assignment", "business_limit"}:
+            raise ValueError("check must be bfla, mass_assignment or business_limit")
+        if rule.get("check") in {"mass_assignment", "business_limit"} and "restore" not in rule:
+            raise ValueError(f"{rule['check']} requires restore")
+        if rule.get("check") == "mass_assignment":
+            if not isinstance(rule.get("request"), dict) or not isinstance(rule.get("readback"), dict):
+                raise ValueError("mass_assignment requires request and readback mappings")
+            fields = rule.get("inject", [])
+            if not isinstance(fields, list) or any(
+                    not isinstance(item, (str, dict)) for item in fields):
+                raise ValueError("mass_assignment.inject must be strings or mappings")
+        if rule.get("check") == "business_limit":
+            if not isinstance(rule.get("request"), dict) or not isinstance(rule.get("ledger"), dict):
+                raise ValueError("business_limit requires request and ledger mappings")
+            limits = rule.get("limits", {})
+            allowed_limits = {"per_txn_max", "daily_max", "min", "precision"}
+            if not isinstance(limits, dict) or set(limits) - allowed_limits:
+                raise ValueError("business_limit.limits has unsupported keys")
+            cases = rule.get("cases")
+            allowed_cases = {"negative", "zero", "sub_precision", "over_balance",
+                             "over_per_txn_limit", "max_int64", "numeric_string",
+                             "scientific_notation"}
+            if not isinstance(cases, list) or not cases or set(cases) - allowed_cases:
+                raise ValueError("business_limit.cases must use the built-in case library")
+            if "over_per_txn_limit" in cases and "per_txn_max" not in limits:
+                raise ValueError("over_per_txn_limit requires limits.per_txn_max")
         differential = "leak_detection" in rule
         mutating = rule.get("mutating", False)
         if type(mutating) is not bool:
@@ -421,6 +449,73 @@ def _validate_rules(rules, *, require_mutating=True, accept_generated=False):
             raise ValueError("Mutating rules require distinct primary and forbidden contexts")
 
 
+def _normalize_check(rule: dict) -> dict:
+    """Normalize documented check aliases into the existing execution shapes."""
+    rule = dict(rule)
+    kind = rule.get("check")
+    if kind == "bfla":
+        privileged, unprivileged = rule.get("privileged"), rule.get("unprivileged")
+        if not isinstance(privileged, str) or not isinstance(unprivileged, str) or privileged == unprivileged:
+            raise ValueError("bfla requires distinct privileged and unprivileged identities")
+        rule["auth_contexts"] = {"primary": privileged, "forbidden": unprivileged}
+        if not rule.get("mutating"):
+            rule.setdefault("leak_detection", {"canaries": []})
+        rule.setdefault("controls", {"nonexistent_object": True, "unauthenticated": True})
+    if kind in {"mass_assignment", "business_limit"}:
+        rule["mutating"] = True
+        request = rule.get("request")
+        if isinstance(request, dict) and "target_endpoints" not in rule:
+            method, path = request.get("method"), request.get("path")
+            if not isinstance(method, str) or not isinstance(path, str):
+                raise ValueError(f"{kind}.request needs method and path")
+            rule["target_endpoints"] = [{"method": method, "path": path.split("?", 1)[0]}]
+    return rule
+
+
+def _expand_checks(rules):
+    """Expand access matrices and business-limit cases into individual checks."""
+    output = []
+    for original in rules:
+        if "access_matrix" not in original and not (
+                original.get("check") == "business_limit" and original.get("cases")):
+            output.append(_normalize_check(original))
+            continue
+        if original.get("check") == "business_limit":
+            for case in original["cases"]:
+                expanded = copy.deepcopy(original)
+                expanded["id"] = f"{original['id']}#{case}"
+                expanded["_case"] = case
+                expanded.pop("cases", None)
+                output.append(_normalize_check(expanded))
+            continue
+        matrix = original["access_matrix"]
+        if not isinstance(matrix, dict):
+            raise ValueError("access_matrix must be a mapping")
+        roles = matrix.get("roles")
+        endpoints = matrix.get("endpoints")
+        if not isinstance(roles, dict) or not roles or not isinstance(endpoints, list) or not endpoints:
+            raise ValueError("access_matrix requires roles and endpoints")
+        for endpoint in endpoints:
+            if not isinstance(endpoint, dict):
+                raise ValueError("access_matrix endpoints must be mappings")
+            path, method = endpoint.get("path"), endpoint.get("method")
+            allowed = endpoint.get("allowed_roles")
+            if (not isinstance(path, str) or not path.startswith("/")
+                    or not isinstance(method, str) or not isinstance(allowed, list)
+                    or not allowed or any(role not in roles for role in allowed)):
+                raise ValueError("access_matrix endpoint is invalid")
+            privileged = roles[allowed[0]]
+            for role in roles:
+                if role in allowed:
+                    continue
+                expanded = {key: value for key, value in original.items() if key != "access_matrix"}
+                expanded.update(id=f"{original['id']}#{method} {path}#{role}", check="bfla",
+                                privileged=privileged, unprivileged=roles[role],
+                                target_endpoints=[{"method": method, "path": path}])
+                output.append(_normalize_check(expanded))
+    return output
+
+
 def load_rules(paths: Iterable[str], *, accept_generated: bool = False) -> list[dict[str, Any]]:
     """Load UTF-8 YAML files; raise ValueError on any invalid/duplicate rule."""
     if isinstance(paths, (str, bytes)):
@@ -441,6 +536,7 @@ def load_rules(paths: Iterable[str], *, accept_generated: bool = False) -> list[
         if not isinstance(document, list):
             raise ValueError("Rule file must contain a rule, a list, or a rules mapping")
         rules.extend(document)
+    rules = _expand_checks(rules)
     _validate_rules(rules, require_mutating=True, accept_generated=accept_generated)
     for rule in rules:
         rule["severity"] = rule["severity"].lower()
@@ -1002,6 +1098,169 @@ async def _restore_mutation(runtime, rule, variables, primary, forbidden):
                         "error", "restore_failed")
 
 
+MASS_ASSIGNMENT_FIELDS = (
+    "role", "roles", "is_admin", "admin", "is_staff", "balance", "limit",
+    "status", "verified", "kyc_status", "plan", "owner_id", "user_id", "account_id",
+)
+
+
+def _set_path(body, name, value):
+    current = body
+    parts = name.split(".")
+    for part in parts[:-1]:
+        child = current.get(part)
+        if not isinstance(child, dict):
+            child = {}
+            current[part] = child
+        current = child
+    current[parts[-1]] = value
+
+
+def _readback_paths(readback):
+    paths = readback.get("paths", [])
+    if isinstance(paths, dict):
+        return list(paths.values())
+    return list(paths) if isinstance(paths, list) else []
+
+
+async def _execute_mass_assignment(runtime, rule, variables, primary, forbidden):
+    readback = rule["readback"]
+    snapshot_request = readback.get("request", readback)
+    paths = _readback_paths(readback)
+    try:
+        before_response = await runtime.custom_request(snapshot_request, variables, primary, forbidden)
+        before_payload = before_response.json()
+    except (_Stop, ValueError, TypeError):
+        raise _Stop("Mass-assignment readback was unavailable.", "inconclusive", "unverified_mutation")
+    before = {path: _lookup(before_payload, path) for path in paths}
+    inject = rule.get("inject") or list(MASS_ASSIGNMENT_FIELDS)
+    request = copy.deepcopy(rule["request"])
+    body = copy.deepcopy(request.get("body", {}))
+    fields = []
+    markers = {}
+    for item in inject:
+        if isinstance(item, str):
+            name, kind = item, "string"
+        else:
+            name, kind = item.get("name"), item.get("type", "string")
+        if not isinstance(name, str) or not name or kind not in {"string", "number", "boolean"}:
+            raise _Stop("Invalid mass-assignment candidate.", "error", "invalid_rule")
+        previous = _lookup(before_payload, name)
+        if kind == "boolean":
+            value = not (previous if isinstance(previous, bool) else False)
+        elif kind == "number":
+            value = 7_391_528 + len(fields)
+        else:
+            value = "lp-marker-" + secrets.token_hex(12)
+        _set_path(body, name, value)
+        fields.append(name)
+        markers[name] = value
+    request["body"] = body
+    attempted = False
+    status = None
+    after = {}
+    try:
+        attempted = True
+        response = await runtime.custom_request(request, variables, primary, forbidden)
+        status = response.status_code
+        if 200 <= status < 300:
+            try:
+                after_response = await runtime.custom_request(snapshot_request, variables, primary, forbidden)
+                after_payload = after_response.json()
+            except (_Stop, ValueError, TypeError):
+                after_payload = None
+            if after_payload is None:
+                raise _Stop("Mass-assignment readback was unavailable after the mutation.",
+                            "inconclusive", "unverified_mutation")
+            after = {name: _lookup(after_payload, readback.get("paths", {}).get(name, name)
+                                   if isinstance(readback.get("paths"), dict) else name)
+                     for name in fields}
+    finally:
+        if attempted:
+            await _restore_mutation(runtime, rule, variables, primary, forbidden)
+    evidence = {"mutation_status": status, "fields_injected": len(fields),
+                "fields": fields,
+                "fields_confirmed": sum(after.get(name) == markers[name] for name in fields)}
+    if status is not None and 400 <= status < 500:
+        return {"status": "passed", "verdict": "PASS", "confidence": "high",
+                "message": "Mass-assignment request was rejected.", "note": "rejected",
+                "evidence": evidence}
+    if not 200 <= (status or 0) < 300:
+        return {"status": "inconclusive", "verdict": "INCONCLUSIVE", "confidence": "reduced",
+                "message": "Mass-assignment request returned an unexpected status.",
+                "reason": "unexpected_status", "evidence": evidence}
+    if evidence["fields_confirmed"]:
+        return {"status": "failed", "verdict": "FAIL", "confidence": "high",
+                "message": "Privileged fields were persisted.", "reason": "mass_assignment",
+                "evidence": evidence}
+    return {"status": "passed", "verdict": "PASS", "confidence": "high",
+            "message": "Injected fields were not persisted.", "note": "ignored", "evidence": evidence}
+
+
+def _business_case_value(case, limits, before):
+    if case == "negative": return -1
+    if case == "zero": return 0
+    if case == "sub_precision": return 10 ** -int(limits.get("precision", 2)) / 2
+    if case == "over_balance": return (before if isinstance(before, (int, float)) else 1000) + 1
+    if case == "over_per_txn_limit": return limits["per_txn_max"] + 1
+    if case == "max_int64": return 2 ** 63 - 1
+    if case == "numeric_string": return str(limits.get("per_txn_max", 100) + 1)
+    if case == "scientific_notation": return "1e3"
+    raise ValueError("unknown business-limit case")
+
+
+async def _execute_business_limit(runtime, rule, variables, primary, forbidden):
+    ledger = rule["ledger"]
+    snapshot = ledger["snapshot"]
+    path = ledger["path"]
+    try:
+        before_response = await runtime.custom_request(snapshot, variables, primary, forbidden)
+        before = _lookup(before_response.json(), path)
+    except (_Stop, ValueError, TypeError):
+        before = None
+    if type(before) not in (int, float) or isinstance(before, bool):
+        return {"status": "inconclusive", "verdict": "INCONCLUSIVE", "confidence": "reduced",
+                "message": "Business-limit ledger snapshot was unavailable.",
+                "reason": "ledger_unavailable", "evidence": {"case": rule["_case"]}}
+    amount = _business_case_value(rule["_case"], rule.get("limits", {}), before)
+    previous = runtime.variables
+    runtime.variables = {**previous, "amount": amount}
+    attempted = False
+    status = None
+    after = None
+    try:
+        attempted = True
+        response = await runtime.custom_request(rule["request"], runtime.variables, primary, forbidden)
+        status = response.status_code
+        try:
+            after_response = await runtime.custom_request(snapshot, runtime.variables, primary, forbidden)
+            after = _lookup(after_response.json(), path)
+        except (_Stop, ValueError, TypeError):
+            after = None
+    finally:
+        runtime.variables = previous
+        if attempted:
+            await _restore_mutation(runtime, rule, variables, primary, forbidden)
+    if type(after) not in (int, float) or isinstance(after, bool):
+        return {"status": "inconclusive", "verdict": "INCONCLUSIVE", "confidence": "reduced",
+                "message": "Business-limit ledger snapshot was unavailable after the request.",
+                "reason": "ledger_unavailable", "evidence": {"case": rule["_case"],
+                                                                   "mutation_status": status}}
+    moved = after != before
+    evidence = {"case": rule["_case"], "mutation_status": status, "ledger_changed": moved}
+    if 200 <= (status or 0) < 300 and moved:
+        return {"status": "failed", "verdict": "FAIL", "confidence": "high",
+                "message": "Declared business limit was bypassed.", "reason": "limit_bypass",
+                "evidence": evidence}
+    if not 200 <= (status or 0) < 300 and moved:
+        return {"status": "failed", "verdict": "FAIL", "confidence": "high",
+                "message": "Ledger changed despite rejection.", "reason": "state_changed_despite_reject",
+                "evidence": evidence}
+    return {"status": "passed", "verdict": "PASS", "confidence": "high",
+            "message": "Request did not move the ledger.", "note": "soft_reject",
+            "evidence": evidence}
+
+
 async def _execute_mutation(runtime, endpoint, inputs, forbidden, rule, variables, marker):
     verify = rule.get("verify")
     before_hash = None
@@ -1119,6 +1378,10 @@ async def _execute_race(runtime, endpoint, rule, variables, client, allowed_host
     try:
         inputs = await runtime.inputs(endpoint, rule, identity, (op,) if op else (), [0])
         for _ in range(race["rounds"]):
+            try:
+                client.check_kill()
+            except KillSwitch:
+                raise _Stop("Kill switch is active.", "skipped", "kill_switch") from None
             if not await _race_reset(runtime, rule["race"], primary, forbidden):
                 reset_failed = True
                 break
@@ -1380,6 +1643,7 @@ async def run_rules(inventory: dict, rules: list[dict], client,
     Invalid rules/context/variable configuration raises ValueError before any HTTP.
     Per-endpoint resolution, transport and baseline failures become result records.
     """
+    rules = _expand_checks(rules)
     _validate_rules(rules, require_mutating=False, accept_generated=accept_generated)
     if spec_check not in {"strict", "warn"}:
         raise ValueError("spec_check must be strict or warn")
@@ -1482,6 +1746,16 @@ async def run_rules(inventory: dict, rules: list[dict], client,
                                                      inventory["base_url"])
                     if missing:
                         raise _Stop(f"Mutation blocked: {missing}.", "skipped", "mutation_blocked")
+                    if rule.get("check") == "mass_assignment":
+                        result.update(await _execute_mass_assignment(
+                            runtime, rule, runtime.variables, primary, forbidden))
+                        results.append(result)
+                        continue
+                    if rule.get("check") == "business_limit":
+                        result.update(await _execute_business_limit(
+                            runtime, rule, runtime.variables, primary, forbidden))
+                        results.append(result)
+                        continue
                     if "race" in rule:
                         result.update(await _execute_race(runtime, endpoint, rule,
                                                           runtime.variables, client, allowed_hosts))

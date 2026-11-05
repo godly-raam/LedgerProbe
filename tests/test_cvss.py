@@ -49,7 +49,7 @@ def test_malformed_vectors_rejected(vector):
 def test_default_vectors_are_valid_and_scoped():
     assert set(DEFAULT_VECTORS) == {
         "bola", "state_change", "race", "unauthenticated_access",
-        "caller_scope", "shared_scope",
+        "caller_scope", "shared_scope", "bfla", "mass_assignment", "business_limit",
     }
     for vector in DEFAULT_VECTORS.values():
         assert 0 <= score_vector(vector)["score"] <= 10

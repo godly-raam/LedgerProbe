@@ -6,11 +6,14 @@ import json
 
 CHECK_TYPES = {
     "bola", "state_change", "race", "unauthenticated_access",
-    "caller_scope", "shared_scope",
+    "caller_scope", "shared_scope", "bfla", "mass_assignment", "business_limit",
 }
 
 
 def check_type(rule: dict) -> str:
+    declared = rule.get("check")
+    if declared in {"bfla", "mass_assignment", "business_limit"}:
+        return declared
     if "race" in rule:
         return "race"
     if rule.get("mutating"):
