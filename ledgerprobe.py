@@ -3,10 +3,13 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import builtins
 import json
 import math
 import os
+import secrets
 import sys
+import time
 from collections import Counter
 from pathlib import Path
 from urllib.parse import quote, urlsplit
@@ -19,6 +22,7 @@ from pkg.auth import AuthManager, load_auth_config
 from pkg.dojo import write_export as write_defectdojo
 from pkg.guardrails import GuardedClient
 from pkg.integrations import TrackerError, load_integrations, process_tickets
+from pkg.observability import github_summary, log_event, metrics_text, write_metrics
 from pkg.parser import load_inventory
 from pkg.reporter import notify, write_junit, write_sarif
 from pkg.rules import load_rules, run_rules
@@ -42,6 +46,15 @@ def positive_int(value: str) -> int:
     if result <= 0:
         raise argparse.ArgumentTypeError("must be positive")
     return result
+
+
+def header(value: str) -> tuple[str, str]:
+    name, separator, text = value.partition(":")
+    name = name.strip()
+    text = text.strip()
+    if not separator or not name or any(char in text for char in "\r\n"):
+        raise argparse.ArgumentTypeError("use NAME:VALUE without newlines")
+    return name, text
 
 
 def mutation(value: str) -> tuple[str, str]:
@@ -101,6 +114,17 @@ def arguments(argv=None) -> argparse.Namespace:
     parser.add_argument("--accept-generated", action="store_true",
                         help="explicitly accept generated rules carrying review_required: true")
     parser.add_argument("--allow-mutation", action="append", type=mutation, default=[], metavar="METHOD:/path")
+    parser.add_argument("--log-format", choices=("text", "json"), default="text")
+    parser.add_argument("--metrics-file", type=Path,
+                        help="write Prometheus textfile-collector metrics")
+    parser.add_argument("--run-id", help="stable scan identifier (default: random)")
+    parser.add_argument("--kill-file", type=Path,
+                        help="stop gracefully when this file exists")
+    parser.add_argument("--environment", choices=("lab", "staging", "production"), default="lab")
+    parser.add_argument("--allow-production-read-only", action="store_true",
+                        help="explicitly permit a read-only production scan")
+    parser.add_argument("--extra-header", action="append", default=[], type=header,
+                        metavar="NAME:VALUE", help="non-secret SOC header; repeatable")
     return parser.parse_args(argv)
 
 
@@ -127,11 +151,29 @@ def target_url(value: str) -> str:
 
 
 async def execute(args: argparse.Namespace) -> int:
+    started = time.monotonic()
+    json_logs = getattr(args, "log_format", "text") == "json"
+    # JSON mode reserves stdout for one event object per line.
+    _text_print = builtins.print
+    print = (lambda *values, **kwargs: None) if json_logs else _text_print
+    run_id = getattr(args, "run_id", None) or secrets.token_hex(12)
+    if not isinstance(run_id, str) or not run_id or len(run_id) > 160 or any(
+            char in run_id for char in "\r\n"):
+        raise ValueError("run_id must be a nonempty single-line value")
+    environment = getattr(args, "environment", "lab")
+    if environment == "production" and args.read_only and not getattr(
+            args, "allow_production_read_only", False):
+        raise ValueError("production_read_only_requires_allow")
     rules = load_rules(args.rules, accept_generated=args.accept_generated)
     if not rules:
         raise ValueError("at least one rule is required")
     inputs = read_inputs(args.inputs)
     auth_config = load_auth_config(args.auth) if args.auth else None
+    if auth_config is not None:
+        for name, identity in auth_config["identities"].items():
+            if identity["environment"] != environment:
+                print(f"[ERROR] environment_mismatch: identity {name} is {identity['environment']}, run is {environment}", file=sys.stderr)
+                return 2
     if inputs.get("contexts") and auth_config is not None:
         raise ValueError("use --auth or legacy inputs.json contexts, not both")
     if inputs.get("contexts") and auth_config is None:
@@ -146,9 +188,15 @@ async def execute(args: argparse.Namespace) -> int:
             raise ValueError("webhooks must be a JSON array")
         # Validate before touching the target, even when there will be no findings.
         await notify([], webhooks, None)
+    default_headers = {"User-Agent": f"LedgerProbe/{__version__}",
+                       "X-LedgerProbe-Run": run_id}
+    if auth_config:
+        default_headers.update(auth_config.get("extra_headers", {}))
+    default_headers.update(dict(getattr(args, "extra_header", []) or []))
     async with GuardedClient(max_rps=args.max_rps, concurrency=args.concurrency,
                              read_only=args.read_only, allow_mutations=args.allow_mutation,
-                             timeout=args.timeout) as client:
+                             timeout=args.timeout, default_headers=default_headers,
+                             kill_file=args.kill_file) as client:
         inventory = await load_inventory(args.spec, client)
         inventory["base_url"] = target_url(args.base_url or inventory["base_url"])
         if args.base_url:
@@ -178,6 +226,7 @@ async def execute(args: argparse.Namespace) -> int:
                 spec_check=args.spec_check, allow_mutations=args.allow_mutations,
                 allowed_hosts=args.allow_host, read_only=args.read_only,
                 accept_generated=args.accept_generated, auth_manager=auth_manager,
+                environment=environment,
             )
         finally:
             if auth_manager is not None:
@@ -220,6 +269,19 @@ async def execute(args: argparse.Namespace) -> int:
                                   suppressions=suppression_stats, drift=drift)
         write_document(document, args.json)
     counts = Counter(result["status"] for result in results)
+    target_label = urlsplit(inventory["base_url"]).netloc
+    if json_logs:
+        duration = time.monotonic() - started
+        for result in results:
+            log_event(run_id, "check", target=target_label, tool_version=__version__,
+                      result=result, duration_ms=duration * 1000)
+        verdicts = Counter(result.get("verdict", "UNKNOWN") for result in results)
+        inconclusive = counts.get("inconclusive", 0) / max(1, len(results))
+        log_event(run_id, "run_summary", target=target_label, tool_version=__version__,
+                  duration_ms=duration * 1000,
+                  extra={"status_counts": dict(counts),
+                         "verdict_counts": dict(verdicts),
+                         "inconclusive_rate": inconclusive})
     for result in results:
         if result.get("spec_drift"):
             if str(result["spec_drift"]).startswith("traffic inventory:"):
@@ -270,6 +332,12 @@ async def execute(args: argparse.Namespace) -> int:
                           fail_on_inconclusive=args.fail_on_inconclusive,
                           fail_on_stale=args.fail_on_stale,
                           stale=(suppression_stats or {}).get("stale", 0))
+    if args.metrics_file:
+        write_metrics(args.metrics_file, metrics_text(
+            results, duration_seconds=time.monotonic() - started,
+            tracker_errors=int(tracker_failed)))
+    if any(result.get("reason") == "kill_switch" for result in results):
+        return 4
     if tracker_failed and args.fail_on_tracker_error and exit_code != 2:
         return 3
     return exit_code

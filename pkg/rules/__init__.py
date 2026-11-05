@@ -19,7 +19,7 @@ import httpx
 import yaml
 
 from ..auth import AuthError
-from ..guardrails import UnsafeRequest
+from ..guardrails import KillSwitch, UnsafeRequest
 from ..cvss import parse_vector, resolve_cvss
 from ..fingerprints import check_type, fingerprint, identity_roles
 from ..cwe import cwe_for
@@ -592,6 +592,8 @@ class _Runtime:
                 response = await self.client.request(endpoint["method"], inputs["url"], **kwargs)
                 self.notes.add("auth_refreshed")
             return response
+        except KillSwitch:
+            raise _Stop("Kill switch is active.", "skipped", "kill_switch") from None
         except UnsafeRequest:
             raise _Stop("Request blocked by the safety guard.", "skipped", "safety_blocked") from None
         except httpx.TimeoutException:
@@ -1147,6 +1149,8 @@ async def _execute_race(runtime, endpoint, rule, variables, client, allowed_host
                 sent = await client.send_synchronized(
                     payloads, mode=race["sync"], max_spread_ms=race["max_spread_ms"],
                     inter_round_delay=0.05, allowed_hosts=allowed_hosts)
+            except KillSwitch:
+                raise _Stop("Kill switch is active.", "skipped", "kill_switch") from None
             except UnsafeRequest:
                 raise _Stop("Race request blocked by the safety guard.", "skipped", "safety_blocked") from None
             except (OSError, httpx.HTTPError):
@@ -1369,7 +1373,8 @@ async def run_rules(inventory: dict, rules: list[dict], client,
                     contexts: dict | None = None, variables: dict | None = None,
                     spec_check: str = "strict", allow_mutations: bool = False,
                     allowed_hosts=(), read_only: bool = False,
-                    accept_generated: bool = False, auth_manager=None) -> list[dict]:
+                    accept_generated: bool = False, auth_manager=None,
+                    environment: str = "lab") -> list[dict]:
     """Execute selected rules through an async guarded client; return redacted results.
 
     Invalid rules/context/variable configuration raises ValueError before any HTTP.
@@ -1380,6 +1385,8 @@ async def run_rules(inventory: dict, rules: list[dict], client,
         raise ValueError("spec_check must be strict or warn")
     if not isinstance(allow_mutations, bool):
         raise ValueError("allow_mutations must be boolean")
+    if environment not in {"lab", "staging", "production"}:
+        raise ValueError("environment must be lab, staging or production")
     if isinstance(allowed_hosts, str):
         raise ValueError("allowed_hosts must be an iterable of host names")
     allowed_hosts = tuple(allowed_hosts)
@@ -1424,6 +1431,13 @@ async def run_rules(inventory: dict, rules: list[dict], client,
             if "remediation" in rule:
                 result["remediation"] = rule["remediation"]
             try:
+                try:
+                    client.check_kill()
+                except KillSwitch:
+                    raise _Stop("Kill switch is active.", "skipped", "kill_switch") from None
+                if environment == "production" and (rule.get("mutating") or selected_type == "race"):
+                    raise _Stop("Mutating and race rules are blocked in production.",
+                                "skipped", "mutation_blocked_production")
                 effective_spec_check = rule.get("spec_check", spec_check)
                 if effective_spec_check not in {"strict", "warn"}:
                     raise ValueError("spec_check must be strict or warn")

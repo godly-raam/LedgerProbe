@@ -17,7 +17,7 @@ from urllib.parse import urlsplit
 
 import httpx
 
-from . import UnsafeRequest
+from . import KillSwitch, UnsafeRequest
 
 _MODES = {"last_byte", "h2_single_packet", "burst"}
 _H2_COALESCE_LIMIT = 1200
@@ -54,9 +54,8 @@ def _prepare(client, request: dict) -> httpx.Request:
     method = request["method"]
     if "url" not in request:
         raise ValueError("synchronized requests require a url")
-    if client._kill_file and __import__("os").path.exists(client._kill_file):
-        raise UnsafeRequest("kill switch is active")
-    headers = {**getattr(client, "_default_headers", {}), **dict(request.get("headers", {}))}
+    client.check_kill()
+    headers = {**dict(request.get("headers", {})), **getattr(client, "_default_headers", {})}
     kwargs = {"headers": headers}
     if "params" in request:
         kwargs["params"] = request["params"]
@@ -352,6 +351,7 @@ async def send_synchronized(client, requests, *, mode="last_byte", max_spread_ms
     timeout = client._http.timeout.read or 15.0
     if timeout is None or timeout <= 0:
         timeout = 15.0
+    client.check_kill()
     if mode == "burst":
         result = await _burst_round(client, requests, timeout)
     elif mode == "h2_single_packet":
@@ -359,4 +359,5 @@ async def send_synchronized(client, requests, *, mode="last_byte", max_spread_ms
     else:
         result = await _last_byte_round(client, requests, tuple(allowed_hosts), timeout)
     await asyncio.sleep(max(0.0, float(inter_round_delay)))
+    client.check_kill()
     return result

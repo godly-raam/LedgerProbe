@@ -108,6 +108,14 @@ and emits a warning. A tracker error is a warning unless
 `--fail-on-tracker-error` is set, in which case the scan exits 3 after reports
 are written.
 
+## DefectDojo
+
+The Generic Findings Import JSON exporter is implemented as
+`--format defectdojo --json OUTPUT`. Uploading with `ledgerprobe upload-dojo` is
+**not implemented**; no command or live import has been verified. Import the
+exported JSON through your DefectDojo UI/API and verify field names against your
+deployed version.
+
 ## Commands and CI
 
 ```bash

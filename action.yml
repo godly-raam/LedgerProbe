@@ -1,0 +1,87 @@
+name: LedgerProbe
+description: Run LedgerProbe, write a metadata-only summary, and upload SARIF.
+inputs:
+  rules:
+    description: Space-separated rule files.
+    required: true
+  auth:
+    description: Optional ledgerprobe-auth.yaml path.
+    required: false
+  spec:
+    description: OpenAPI, Swagger, or Postman document.
+    required: true
+  baseline:
+    description: Optional prior results JSON.
+    required: false
+  fail-on:
+    description: new, any, or none.
+    required: false
+    default: new
+  tickets:
+    description: off, dry-run, plan, or apply.
+    required: false
+    default: plan
+  environment:
+    description: lab, staging, or production.
+    required: false
+    default: staging
+  sarif-upload:
+    description: Upload results.sarif to code scanning.
+    required: false
+    default: "true"
+outputs:
+  sarif:
+    description: SARIF path.
+    value: ${{ steps.scan.outputs.sarif }}
+  results:
+    description: Results JSON path.
+    value: ${{ steps.scan.outputs.results }}
+runs:
+  using: composite
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5  # TODO: pin SHA
+      with:
+        python-version: "3.12"
+    - name: Install LedgerProbe
+      shell: bash
+      run: python -m pip install .
+    - name: Run LedgerProbe
+      id: scan
+      shell: bash
+      env:
+        INPUT_SPEC: ${{ inputs.spec }}
+        INPUT_RULES: ${{ inputs.rules }}
+        INPUT_AUTH: ${{ inputs.auth }}
+        INPUT_BASELINE: ${{ inputs.baseline }}
+        INPUT_FAIL_ON: ${{ inputs.fail-on }}
+        INPUT_TICKETS: ${{ inputs.tickets }}
+        INPUT_ENVIRONMENT: ${{ inputs.environment }}
+      run: |
+        set -euo pipefail
+        args=(--spec "$INPUT_SPEC" --rules $INPUT_RULES --environment "$INPUT_ENVIRONMENT"
+              --tickets "$INPUT_TICKETS" --fail-on "$INPUT_FAIL_ON"
+              --json ledgerprobe-results.json --sarif ledgerprobe-results.sarif)
+        if [ -n "$INPUT_AUTH" ]; then args+=(--auth "$INPUT_AUTH"); fi
+        if [ -n "$INPUT_BASELINE" ]; then args+=(--baseline "$INPUT_BASELINE"); fi
+        ledgerprobe "${args[@]}"
+        printf 'sarif=%s\n' "$PWD/ledgerprobe-results.sarif" >> "$GITHUB_OUTPUT"
+        printf 'results=%s\n' "$PWD/ledgerprobe-results.json" >> "$GITHUB_OUTPUT"
+    - name: Write step summary
+      if: always() && steps.scan.outputs.results != ''
+      shell: bash
+      run: |
+        python - "${{ steps.scan.outputs.results }}" <<'PY'
+        import json, os, sys
+        from pkg.observability import github_summary
+        doc = json.load(open(sys.argv[1], encoding="utf-8"))
+        doc["findings"] = [f for f in doc.get("findings", [])
+                           if f.get("baseline_status") in (None, "new")]
+        with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as out:
+            out.write(github_summary(doc))
+        PY
+    - name: Upload SARIF
+      if: always() && inputs['sarif-upload'] == 'true' && steps.scan.outputs.sarif != ''
+      uses: github/codeql-action/upload-sarif@v3  # TODO: pin SHA
+      with:
+        sarif_file: ${{ steps.scan.outputs.sarif }}

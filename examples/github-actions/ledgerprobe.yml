@@ -1,0 +1,44 @@
+name: LedgerProbe
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4  # TODO: pin SHA
+      - id: ledgerprobe
+        uses: ./
+        with:
+          spec: specs/openapi.yaml
+          rules: rulesets/abac_isolation.yaml
+          baseline: ledgerprobe-baseline.json
+          fail-on: new
+          tickets: ${{ github.event_name == 'pull_request' && 'plan' || 'apply' }}
+          environment: staging
+          sarif-upload: "false"
+      - if: github.event_name == 'pull_request'
+        run: ledgerprobe diff ledgerprobe-baseline.json "${{ steps.ledgerprobe.outputs.results }}"
+      - if: always() && steps.ledgerprobe.outputs.sarif != ''
+        uses: actions/upload-artifact@v4  # TODO: pin SHA
+        with:
+          name: ledgerprobe-results
+          path: ${{ steps.ledgerprobe.outputs.sarif }}
+  upload:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: scan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4  # TODO: pin SHA
+      - uses: actions/download-artifact@v4  # TODO: pin SHA
+        with:
+          name: ledgerprobe-results
+      - uses: github/codeql-action/upload-sarif@v3  # TODO: pin SHA
+        with:
+          sarif_file: ledgerprobe-results.sarif

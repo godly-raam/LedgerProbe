@@ -223,7 +223,8 @@ class GuardedClient:
         auth_flow = kwargs.pop("auth_flow", None) is AUTH_FLOW
         auth = kwargs.pop("auth", httpx.USE_CLIENT_DEFAULT)
         headers = dict(kwargs.pop("headers", {}) or {})
-        headers = {**self._default_headers, **headers}
+        # Identification headers are fixed and cannot be overridden by rules.
+        headers = {**headers, **self._default_headers}
         kwargs["headers"] = headers
         request = self._http.build_request(method, url, **kwargs)
         path = request.url.raw_path.split(b"?", 1)[0].decode("ascii")
@@ -245,6 +246,11 @@ class GuardedClient:
                 if response is not None:
                     self._feedback(response)
                 self._condition.notify_all()
+
+    def check_kill(self) -> None:
+        """Raise when the operator requested a graceful stop."""
+        if self._kill_file and os.path.exists(self._kill_file):
+            raise KillSwitch("kill switch is active")
 
     async def _take_tokens(self, count: int) -> None:
         """Consume rate/cooldown admission for raw synchronized traffic."""

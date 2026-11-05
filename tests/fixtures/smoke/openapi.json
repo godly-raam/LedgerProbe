@@ -1,0 +1,1 @@
+{"openapi":"3.1.0","info":{"title":"Smoke","version":"1.0"},"servers":[{"url":"https://smoke.test"}],"paths":{"/objects/{id}":{"get":{"parameters":[{"name":"id","in":"path","required":true,"schema":{"type":"string"}}],"responses":{"200":{"description":"ok"}}}}}}

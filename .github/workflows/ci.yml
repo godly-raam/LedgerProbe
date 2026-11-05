@@ -203,3 +203,34 @@ jobs:
         with:
           name: corpus-metrics
           path: corpus_metrics.md
+
+  docker:
+    name: Container build and scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4  # TODO: pin SHA
+
+      - name: Build image
+        run: docker build -t ledgerprobe:ci .
+
+      - name: Verify installed CLI
+        run: docker run --rm ledgerprobe:ci --version
+
+      - name: Offline diff and drift smoke test
+        run: |
+          set -euo pipefail
+          docker run --rm -v "$PWD/tests/fixtures/smoke:/smoke:ro" ledgerprobe:ci \
+            diff /smoke/results-old.json /smoke/results-new.json
+          docker run --rm -v "$PWD/tests/fixtures/smoke:/smoke:ro" ledgerprobe:ci \
+            drift --spec /smoke/openapi.json --inventory /smoke/inventory.json
+
+      - name: Install Trivy
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
+            | sh -s -- -b "$RUNNER_TEMP/bin"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+
+      - name: Scan image for fixed HIGH/CRITICAL vulnerabilities
+        run: trivy image --ignore-unfixed --severity HIGH,CRITICAL --exit-code 1 ledgerprobe:ci

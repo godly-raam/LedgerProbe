@@ -310,8 +310,9 @@ def _identity(value, name: str):
     if provider not in {"static_header", "oauth2_client_credentials", "login_request", "script"}:
         raise AuthError("invalid_auth_config", f"identity {name}.provider is unsupported")
     environment = value["environment"]
-    if environment not in {"lab", "staging"}:
-        raise AuthError("invalid_auth_config", f"identity {name}.environment must be lab or staging")
+    if environment not in {"lab", "staging", "production"}:
+        raise AuthError("invalid_auth_config",
+                        f"identity {name}.environment must be lab, staging or production")
     refresh = value.get("refresh_on_401", False)
     if not isinstance(refresh, bool):
         raise AuthError("invalid_auth_config", f"identity {name}.refresh_on_401 must be boolean")
@@ -375,7 +376,7 @@ def load_auth_config(path) -> dict:
         data = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
     except (OSError, yaml.YAMLError):
         raise AuthError("invalid_auth_config", "auth configuration could not be read") from None
-    _mapping(data, {"schema_version", "identities", "setup", "teardown"},
+    _mapping(data, {"schema_version", "identities", "setup", "teardown", "extra_headers"},
              {"schema_version", "identities"}, "auth configuration")
     if data["schema_version"] != "ledgerprobe-auth/1":
         raise AuthError("invalid_auth_config", "auth schema_version must be ledgerprobe-auth/1")
@@ -387,6 +388,20 @@ def load_auth_config(path) -> dict:
         if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9_.-]+", name):
             raise AuthError("invalid_auth_config", "identity names must be safe identifiers")
         result["identities"][name] = _identity(value, name)
+    if "extra_headers" in data:
+        headers = data["extra_headers"]
+        if not isinstance(headers, dict):
+            raise AuthError("invalid_auth_config", "extra_headers must be an object")
+        result["extra_headers"] = {}
+        for key, value in headers.items():
+            if (not isinstance(key, str) or not _HEADER.fullmatch(key) or not isinstance(value, str)
+                    or not value or len(value) > 256 or any(char in value for char in "\r\n")
+                    or value.lower().startswith(("bearer ", "basic ", "token "))
+                    or re.search(r"(?i)(secret|password|api[-_]?key|authorization)", key)
+                    or re.fullmatch(r"[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}", value)):
+                raise AuthError("invalid_auth_config",
+                                "extra_headers may contain only non-secret identification values")
+            result["extra_headers"][key] = value
     for hook in ("setup", "teardown"):
         if hook in data:
             result[hook] = _command(data[hook], hook)

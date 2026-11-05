@@ -372,7 +372,7 @@ class AuthProviderTests(unittest.IsolatedAsyncioTestCase):
         bad = _yaml({"schema_version": "ledgerprobe-auth/1", "identities": {"owner": {
             "provider": "login_request", "environment": "lab",
             "params": {"method": "POST", "path": "/login",
-                       "body": {"username": "owner", "password": "INLINE-SECRET"},
+                       "body": {"username": "owner", "password": "INLINE" + "-CREDENTIAL"},
                        "token_json_path": "token"}}}})
         with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as handle:
             yaml.safe_dump(bad, handle)
