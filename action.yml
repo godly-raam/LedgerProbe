@@ -40,7 +40,7 @@ runs:
   using: composite
   steps:
     - name: Set up Python
-      uses: actions/setup-python@v5  # TODO: pin SHA
+      uses: actions/setup-python@v7  # TODO: pin SHA
       with:
         python-version: "3.12"
     - name: Install LedgerProbe
