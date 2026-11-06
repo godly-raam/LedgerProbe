@@ -1,0 +1,22 @@
+id: authz-bfla-unverified
+name: Unprivileged admin action without verification
+severity: HIGH
+owasp_category: API5:2023
+cvss_score: 8.1
+check: bfla
+privileged: admin
+unprivileged: user
+target_endpoints:
+  - path: /api/v1/admin/action
+    method: POST
+mutating: true
+body:
+  marker: "{{marker}}"
+acceptable_status: [401, 403, 404]
+restore:
+  - method: POST
+    path: /api/v1/admin/action
+    auth: primary
+    body:
+      marker: ""
+confirm: 1

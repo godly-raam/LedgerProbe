@@ -113,6 +113,8 @@ def arguments(argv=None) -> argparse.Namespace:
                         help="traffic inventory JSON from `ledgerprobe import`; merges routes only with --spec-check warn")
     parser.add_argument("--accept-generated", action="store_true",
                         help="explicitly accept generated rules carrying review_required: true")
+    parser.add_argument("--experimental", action="store_true",
+                        help="allow experimental, unvalidated check types")
     parser.add_argument("--allow-mutation", action="append", type=mutation, default=[], metavar="METHOD:/path")
     parser.add_argument("--log-format", choices=("text", "json"), default="text")
     parser.add_argument("--metrics-file", type=Path,
@@ -164,7 +166,8 @@ async def execute(args: argparse.Namespace) -> int:
     if environment == "production" and args.read_only and not getattr(
             args, "allow_production_read_only", False):
         raise ValueError("production_read_only_requires_allow")
-    rules = load_rules(args.rules, accept_generated=args.accept_generated)
+    rules = load_rules(args.rules, accept_generated=args.accept_generated,
+                       experimental=args.experimental)
     if not rules:
         raise ValueError("at least one rule is required")
     inputs = read_inputs(args.inputs)
@@ -226,7 +229,7 @@ async def execute(args: argparse.Namespace) -> int:
                 spec_check=args.spec_check, allow_mutations=args.allow_mutations,
                 allowed_hosts=args.allow_host, read_only=args.read_only,
                 accept_generated=args.accept_generated, auth_manager=auth_manager,
-                environment=environment,
+                environment=environment, experimental=args.experimental,
             )
         finally:
             if auth_manager is not None:

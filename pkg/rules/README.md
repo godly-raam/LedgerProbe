@@ -19,6 +19,13 @@ invalid types and malformed rules with `ValueError`. File I/O errors propagate.
 `run_rules` revalidates rules before making requests; invalid global rule,
 context, variable or base-URL configuration raises `ValueError`.
 
+## Experimental checks
+
+`check: mass_assignment` and `check: business_limit` are **experimental, unvalidated**.
+They are rejected at load time unless `--experimental` is passed. The flag only
+permits loading; all normal mutation gates, restore requirements, and
+read-only/production blocking still apply.
+
 ## Exact YAML format
 
 ```yaml

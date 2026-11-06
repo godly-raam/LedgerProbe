@@ -144,6 +144,30 @@
         }
       }
     },
+    "/api/v1/admin/report": {
+      "get": {
+        "operationId": "getAdminReport",
+        "responses": {"200": {"description": "Admin report"}, "401": {"description": "Unauthorized"}, "403": {"description": "Forbidden"}, "404": {"description": "Not found"}}
+      }
+    },
+    "/api/v1/admin/audit": {
+      "get": {
+        "operationId": "getAdminAudit",
+        "responses": {"200": {"description": "Admin audit"}, "401": {"description": "Unauthorized"}, "403": {"description": "Forbidden"}}
+      }
+    },
+    "/api/v1/admin/state": {
+      "get": {
+        "operationId": "getAdminState",
+        "responses": {"200": {"description": "Admin state"}, "401": {"description": "Unauthorized"}}
+      }
+    },
+    "/api/v1/admin/action": {
+      "post": {
+        "operationId": "adminAction",
+        "responses": {"200": {"description": "Action accepted"}, "401": {"description": "Unauthorized"}, "403": {"description": "Forbidden"}}
+      }
+    },
     "/api/v1/login": {
       "post": {
         "operationId": "loginProbe",

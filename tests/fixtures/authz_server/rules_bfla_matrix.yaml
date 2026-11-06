@@ -1,0 +1,26 @@
+id: authz-bfla-matrix
+name: Admin access matrix must deny unprivileged roles
+severity: HIGH
+owasp_category: API5:2023
+cvss_score: 8.1
+check: bfla
+access_matrix:
+  roles:
+    admin: admin
+    user: user
+  endpoints:
+    - path: /api/v1/admin/report
+      method: GET
+      allowed_roles: [admin]
+    - path: /api/v1/admin/audit
+      method: GET
+      allowed_roles: [admin]
+acceptable_status: [401, 403, 404]
+leak_detection:
+  canaries:
+    - "{{admin_canary}}"
+  min_unique_leaf_values: 2
+controls:
+  nonexistent_object: true
+  unauthenticated: true
+confirm: 2

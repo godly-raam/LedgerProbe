@@ -227,7 +227,7 @@ def _race_spec(value):
         raise ValueError("unique idempotency requires a ledger invariant")
 
 
-def _validate_rules(rules, *, require_mutating=True, accept_generated=False):
+def _validate_rules(rules, *, require_mutating=True, accept_generated=False, experimental=False):
     if not isinstance(rules, list):
         raise ValueError("Rules must be a list")
     ids = set()
@@ -256,6 +256,8 @@ def _validate_rules(rules, *, require_mutating=True, accept_generated=False):
             _text(rule["remediation"])
         if "check" in rule and rule["check"] not in {"bfla", "mass_assignment", "business_limit"}:
             raise ValueError("check must be bfla, mass_assignment or business_limit")
+        if rule.get("check") in {"mass_assignment", "business_limit"} and not experimental:
+            raise ValueError(f"check type {rule['check']} is not yet validated; rerun with --experimental")
         if rule.get("check") in {"mass_assignment", "business_limit"} and "restore" not in rule:
             raise ValueError(f"{rule['check']} requires restore")
         if rule.get("check") == "mass_assignment":
@@ -276,9 +278,10 @@ def _validate_rules(rules, *, require_mutating=True, accept_generated=False):
             allowed_cases = {"negative", "zero", "sub_precision", "over_balance",
                              "over_per_txn_limit", "max_int64", "numeric_string",
                              "scientific_notation"}
-            if not isinstance(cases, list) or not cases or set(cases) - allowed_cases:
+            if rule.get("_case") not in allowed_cases and (
+                    not isinstance(cases, list) or not cases or set(cases) - allowed_cases):
                 raise ValueError("business_limit.cases must use the built-in case library")
-            if "over_per_txn_limit" in cases and "per_txn_max" not in limits:
+            if cases and "over_per_txn_limit" in cases and "per_txn_max" not in limits:
                 raise ValueError("over_per_txn_limit requires limits.per_txn_max")
         differential = "leak_detection" in rule
         mutating = rule.get("mutating", False)
@@ -516,7 +519,8 @@ def _expand_checks(rules):
     return output
 
 
-def load_rules(paths: Iterable[str], *, accept_generated: bool = False) -> list[dict[str, Any]]:
+def load_rules(paths: Iterable[str], *, accept_generated: bool = False,
+               experimental: bool = False) -> list[dict[str, Any]]:
     """Load UTF-8 YAML files; raise ValueError on any invalid/duplicate rule."""
     if isinstance(paths, (str, bytes)):
         raise ValueError("paths must be an iterable of file names")
@@ -537,7 +541,8 @@ def load_rules(paths: Iterable[str], *, accept_generated: bool = False) -> list[
             raise ValueError("Rule file must contain a rule, a list, or a rules mapping")
         rules.extend(document)
     rules = _expand_checks(rules)
-    _validate_rules(rules, require_mutating=True, accept_generated=accept_generated)
+    _validate_rules(rules, require_mutating=True, accept_generated=accept_generated,
+                    experimental=experimental)
     for rule in rules:
         rule["severity"] = rule["severity"].lower()
     return rules
@@ -1637,14 +1642,15 @@ async def run_rules(inventory: dict, rules: list[dict], client,
                     spec_check: str = "strict", allow_mutations: bool = False,
                     allowed_hosts=(), read_only: bool = False,
                     accept_generated: bool = False, auth_manager=None,
-                    environment: str = "lab") -> list[dict]:
+                    environment: str = "lab", experimental: bool = False) -> list[dict]:
     """Execute selected rules through an async guarded client; return redacted results.
 
     Invalid rules/context/variable configuration raises ValueError before any HTTP.
     Per-endpoint resolution, transport and baseline failures become result records.
     """
     rules = _expand_checks(rules)
-    _validate_rules(rules, require_mutating=False, accept_generated=accept_generated)
+    _validate_rules(rules, require_mutating=False, accept_generated=accept_generated,
+                    experimental=experimental)
     if spec_check not in {"strict", "warn"}:
         raise ValueError("spec_check must be strict or warn")
     if not isinstance(allow_mutations, bool):

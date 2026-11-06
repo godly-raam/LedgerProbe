@@ -26,21 +26,27 @@ def run_metrics(output_path: Path | None = None) -> int:
         for profile_name, spec in expectations.items():
             run_tmp = tmp_dir / profile_name
             run_tmp.mkdir(parents=True, exist_ok=True)
-            _, result, _, _ = asyncio.run(execute_profile(profile_name, run_tmp))
-
-            verdict = result["verdict"]
-            reason = result.get("reason")
-            note = result.get("note")
+            _, observed, _, _ = asyncio.run(execute_profile(profile_name, run_tmp))
+            rows = observed if isinstance(observed, list) else [observed]
+            verdicts = [row["verdict"] for row in rows]
+            verdict = verdicts[0] if len(verdicts) == 1 else " + ".join(verdicts)
+            reason = rows[0].get("reason") if len(rows) == 1 else None
+            note = rows[0].get("note") if len(rows) == 1 else None
 
             expected_verdict = spec["expected_verdict"]
             expected_reason = spec["expected_reason"]
             expected_note = spec["expected_note"]
 
-            matched = (
-                verdict == expected_verdict
-                and reason == expected_reason
-                and note == expected_note
-            )
+            if "expected_findings" in spec:
+                matched = (len(rows) == spec["expected_findings"]
+                           and verdicts[0] == expected_verdict
+                           and all(item == "PASS" for item in verdicts[1:]))
+            else:
+                matched = (
+                    verdict == expected_verdict
+                    and reason == expected_reason
+                    and note == expected_note
+                )
 
             results.append({
                 "profile": profile_name,

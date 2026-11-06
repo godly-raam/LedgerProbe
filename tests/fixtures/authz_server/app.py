@@ -66,13 +66,14 @@ class AuthzServerState:
         self.forbidden_call_count = 0
         self.cache: dict[Any, dict] = {}
         self.objects = copy.deepcopy(SEEDED_DATA["objects"])
+        self.admin_setting = "admin-default"
         self.last_marker: str | None = None
 
 
 def get_identity(request: Request) -> str | None:
     """Identify the caller tenant (owner, other) or None for unauthenticated."""
     actor = request.headers.get("X-Actor")
-    if actor in ("owner", "other"):
+    if actor in ("owner", "other", "admin", "user"):
         return actor
     auth = request.headers.get("Authorization", "")
     if auth.startswith("Bearer "):
@@ -81,6 +82,10 @@ def get_identity(request: Request) -> str | None:
             return "owner"
         if token == "token-other":
             return "other"
+        if token == "token-admin":
+            return "admin"
+        if token == "token-user":
+            return "user"
     return None
 
 
@@ -509,6 +514,64 @@ async def handle_mutate(request: Request) -> Response:
     return Response(status_code=status)
 
 
+async def handle_admin_report(request: Request) -> Response:
+    """BFLA fixture: admin-only report, with vulnerable/fixed behavior profiles."""
+    state: AuthzServerState = request.app.state.authz
+    identity = get_identity(request)
+    profile = get_profile(request)
+    data = {"report": "admin-only", "admin_canary": "admin-canary-7391528-B",
+            "detail": "LP-SENTINEL-7391528-B"}
+    if profile == "bfla_unauthenticated_leak" and identity is None:
+        return JSONResponse(data, status_code=200)
+    if identity is None:
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    if identity == "admin":
+        return JSONResponse(data, status_code=200)
+    if profile == "bfla_read_fixed_403":
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    if profile == "bfla_read_fixed_404":
+        return JSONResponse({"error": "not found"}, status_code=404)
+    return JSONResponse(data, status_code=200)
+
+
+async def handle_admin_audit(request: Request) -> Response:
+    """Second admin endpoint used by the access-matrix profile."""
+    identity = get_identity(request)
+    if identity == "admin":
+        return JSONResponse({"audit": "clean", "admin_canary": "admin-canary-7391528-B"},
+                            status_code=200)
+    return JSONResponse({"error": "forbidden"}, status_code=403)
+
+
+async def handle_admin_state(request: Request) -> Response:
+    return JSONResponse({"marker": request.app.state.authz.admin_setting,
+                         "setting": request.app.state.authz.admin_setting}, status_code=200)
+
+
+async def handle_admin_action(request: Request) -> Response:
+    """BFLA mutation fixture. User mutation is proven through admin state."""
+    state: AuthzServerState = request.app.state.authz
+    identity = get_identity(request)
+    profile = get_profile(request)
+    if identity is None:
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    if identity != "admin" and profile == "bfla_mutating_fixed":
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    marker = payload.get("marker") if isinstance(payload, dict) else None
+    if identity == "admin":
+        state.admin_setting = marker if isinstance(marker, str) and marker else "admin-default"
+        return JSONResponse({"status": "accepted"}, status_code=200)
+    if profile == "bfla_200_noop":
+        return JSONResponse({"status": "accepted"}, status_code=200)
+    if isinstance(marker, str):
+        state.admin_setting = marker
+    return JSONResponse({"status": "accepted"}, status_code=200)
+
+
 async def handle_login(request: Request) -> Response:
     """Password probe target; failures are 200 with status=fail like VAmPI."""
     state: AuthzServerState = request.app.state.authz
@@ -534,6 +597,10 @@ def create_app(profile: str | None = None, fixed: bool = False, timeout_delay: f
         Route("/api/v1/not-in-spec/{id}", handle_not_in_spec, methods=["GET"]),
         Route("/api/v1/mutate/{id}", handle_mutate, methods=["PUT"]),
         Route("/api/v1/login", handle_login, methods=["POST"]),
+        Route("/api/v1/admin/report", handle_admin_report, methods=["GET"]),
+        Route("/api/v1/admin/audit", handle_admin_audit, methods=["GET"]),
+        Route("/api/v1/admin/state", handle_admin_state, methods=["GET"]),
+        Route("/api/v1/admin/action", handle_admin_action, methods=["POST"]),
     ])
     app.state.authz = AuthzServerState(profile=profile, fixed=fixed, timeout_delay=timeout_delay)
     return app
