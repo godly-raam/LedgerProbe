@@ -69,11 +69,18 @@ async def execute_profile(profile_name: str, tmp_path: Path, app=None) -> tuple[
          patch.object(ledgerprobe, "run_rules", side_effect=recording):
         exit_code = await ledgerprobe.execute(args)
 
-    assert len(observed) == 1, f"Expected 1 finding result for profile {profile_name}, got {len(observed)}"
-    return exit_code, observed[0], sarif_path, junit_path
+    expected = profile_spec.get("expected_findings", 1)
+    assert len(observed) == expected, (
+        f"Expected {expected} finding result(s) for profile {profile_name}, got {len(observed)}")
+    return exit_code, observed[0] if expected == 1 else observed, sarif_path, junit_path
 
 
-@pytest.mark.parametrize("profile_name,profile_spec", list(EXPECTATIONS.items()), ids=list(EXPECTATIONS.keys()))
+CORPUS_EXPECTATIONS = {name: spec for name, spec in EXPECTATIONS.items()
+                       if "expected_findings" not in spec}
+
+
+@pytest.mark.parametrize("profile_name,profile_spec", list(CORPUS_EXPECTATIONS.items()),
+                         ids=list(CORPUS_EXPECTATIONS))
 def test_corpus_profile(profile_name: str, profile_spec: dict, tmp_path: Path):
     """Test that every fixture profile matches its exact expected verdict, reason, and note."""
     exit_code, result, sarif_path, junit_path = asyncio.run(execute_profile(profile_name, tmp_path))
@@ -161,6 +168,16 @@ def test_mutation_restore_returns_owner_state(tmp_path: Path):
     assert exit_code == 1
     assert result["verdict"] == "FAIL"
     assert app.state.authz.objects == before
+
+
+def test_access_matrix_expands_to_distinct_checks(tmp_path: Path):
+    code, results, _, _ = asyncio.run(execute_profile("access_matrix_expansion", tmp_path))
+    assert code == 1
+    assert [row["verdict"] for row in results] == ["FAIL", "PASS"]
+    assert len({row["rule_id"] for row in results}) == 2
+    assert all(row["rule_id"].endswith("#user") for row in results)
+    assert len({row["fingerprint"] for row in results}) == 2
+    assert all(row["check_type"] == "bfla" for row in results)
 
 
 def test_mutation_marker_is_not_serialized(tmp_path: Path):

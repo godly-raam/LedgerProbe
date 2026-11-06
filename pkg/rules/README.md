@@ -19,6 +19,15 @@ invalid types and malformed rules with `ValueError`. File I/O errors propagate.
 `run_rules` revalidates rules before making requests; invalid global rule,
 context, variable or base-URL configuration raises `ValueError`.
 
+## Experimental checks
+
+BFLA is **validated on fixtures only; not yet benchmarked on real targets**.
+
+`check: mass_assignment` and `check: business_limit` are **experimental, untested; require --experimental**.
+They are rejected at load time unless `--experimental` is passed. The flag only
+permits loading; all normal mutation gates, restore requirements, and
+read-only/production blocking still apply.
+
 ## Exact YAML format
 
 ```yaml

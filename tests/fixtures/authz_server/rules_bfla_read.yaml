@@ -1,0 +1,20 @@
+id: authz-bfla-read
+name: Unprivileged user must not read admin report
+severity: HIGH
+owasp_category: API5:2023
+cvss_score: 8.1
+check: bfla
+privileged: admin
+unprivileged: user
+target_endpoints:
+  - path: /api/v1/admin/report
+    method: GET
+acceptable_status: [401, 403, 404]
+leak_detection:
+  canaries:
+    - "{{admin_canary}}"
+  min_unique_leaf_values: 2
+controls:
+  nonexistent_object: true
+  unauthenticated: true
+confirm: 2

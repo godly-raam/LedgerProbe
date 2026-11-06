@@ -7,6 +7,15 @@
     "other": {
       "Authorization": "Bearer token-other",
       "X-Actor": "other"
+    },
+    "admin": {
+      "Authorization": "Bearer token-admin",
+      "X-Actor": "admin",
+      "X-Admin-Token": "fixture-admin-token"
+    },
+    "user": {
+      "Authorization": "Bearer token-user",
+      "X-Actor": "user"
     }
   },
   "variables": {
@@ -15,6 +24,7 @@
     "owner_username": "user_owner",
     "original_password": "owner-pass",
     "catalog_id": "catalog-1",
-    "canary_value": "canary-secret-owner-9988"
+    "canary_value": "canary-secret-owner-9988",
+    "admin_canary": "admin-canary-7391528-B"
   }
 }

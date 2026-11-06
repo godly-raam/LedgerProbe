@@ -470,6 +470,87 @@ mutation_blocked_read_only:
   extra_args: ["--allow-mutations", "--allow-host", "authz.test"]
   description: "Mutation is skipped when --read-only is set"
 
+bfla_read_vulnerable:
+  category: vulnerable
+  expected_verdict: FAIL
+  expected_reason: leak_detected
+  expected_note: null
+  rule_file: rules_bfla_read.yaml
+  description: "Unprivileged user receives the admin report"
+
+bfla_read_fixed_403:
+  category: safe
+  expected_verdict: PASS
+  expected_reason: null
+  expected_note: null
+  rule_file: rules_bfla_read.yaml
+  description: "Unprivileged user is denied with 403"
+
+bfla_read_fixed_404:
+  category: safe
+  expected_verdict: PASS
+  expected_reason: null
+  expected_note: null
+  rule_file: rules_bfla_read.yaml
+  description: "Unprivileged user is denied with 404"
+
+bfla_mutating_vulnerable:
+  category: vulnerable
+  expected_verdict: FAIL
+  expected_reason: state_changed_by_other
+  expected_note: null
+  rule_file: rules_bfla_mutating.yaml
+  read_only: false
+  extra_args: ["--allow-mutations", "--allow-host", "authz.test"]
+  description: "Unprivileged user changes admin state"
+
+bfla_mutating_fixed:
+  category: safe
+  expected_verdict: PASS
+  expected_reason: null
+  expected_note: null
+  rule_file: rules_bfla_mutating.yaml
+  read_only: false
+  extra_args: ["--allow-mutations", "--allow-host", "authz.test"]
+  description: "Unprivileged admin action is denied"
+
+bfla_200_noop:
+  category: safe
+  expected_verdict: PASS
+  expected_reason: null
+  expected_note: no_effect
+  rule_file: rules_bfla_mutating.yaml
+  read_only: false
+  extra_args: ["--allow-mutations", "--allow-host", "authz.test"]
+  description: "Admin action returns 200 without changing state"
+
+bfla_unverified_mutation:
+  category: tricky
+  expected_verdict: INCONCLUSIVE
+  expected_reason: unverified_mutation
+  expected_note: null
+  rule_file: rules_bfla_unverified.yaml
+  read_only: false
+  extra_args: ["--allow-mutations", "--allow-host", "authz.test"]
+  description: "Successful admin action has no verify block"
+
+bfla_unauthenticated_leak:
+  category: vulnerable
+  expected_verdict: FAIL
+  expected_reason: unauthenticated_leak
+  expected_note: null
+  rule_file: rules_bfla_read.yaml
+  description: "Unauthenticated control reads the admin report"
+
+access_matrix_expansion:
+  category: mixed
+  expected_verdict: FAIL
+  expected_reason: leak_detected
+  expected_note: null
+  expected_findings: 2
+  rule_file: rules_bfla_matrix.yaml
+  description: "One matrix endpoint leaks, the fixed endpoint passes"
+
 mutation_idempotent_restore:
   category: vulnerable
   expected_verdict: FAIL
