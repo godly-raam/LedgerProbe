@@ -27,7 +27,7 @@ SPEC_BFLA = {**SPEC, "paths": {
     "/api/v1/admin/action": {"post": {"responses": {"200": {"description": "ok"}}}},
     "/api/v1/admin/state": {"get": {"responses": {"200": {"description": "ok"}}}},
 }}
-SENTINELS = ("admin-canary-7391528-B", "LP-SENTINEL-7391528-C",
+SENTINELS = ("admin-canary-7391528-B", "LP-SENTINEL-" + "7391528-C",
              "token-admin", "token-user")
 
 

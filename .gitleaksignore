@@ -1,4 +1,7 @@
-# Historical upstream VAmPI OpenAPI sample JWT, replaced in the working tree.
+# Historical test-only fake token in tests/fixtures/authz_server/inputs.json.
+# The value is not a real credential and has been replaced by runtime construction.
+23bcee0fdf305010ff725ef86e790af564063786:tests/fixtures/authz_server/inputs.json:generic-api-key:14
+# Historical synthetic JWT example in the vendored VAmPI benchmark spec.
 e9bdca3d78687655897bee3a5904b0fdd091e30a:benchmark/targets/vampi/openapi.json:jwt:280
-# Intentional inline-credential rejection fixture; value is never used as a credential.
+# Historical synthetic API key in an auth fixture test.
 0e7cb11648550853e0ed9af3c9f0788cb5d3b749:tests/test_auth.py:generic-api-key:372

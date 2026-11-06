@@ -1,5 +1,11 @@
 # Operations and SOC runbook
 
+## CI tool versions
+
+Gitleaks is pinned to **8.28.0** in `.github/workflows/ci.yml`. CI downloads the
+v8.28.0 Linux x64 release archive and verifies its SHA-256 checksum before
+running the full-history scan.
+
 ## Identifying scan traffic
 
 Every target request carries `User-Agent: LedgerProbe/<version>` and

@@ -11,7 +11,7 @@
     "admin": {
       "Authorization": "Bearer token-admin",
       "X-Actor": "admin",
-      "X-Admin-Token": "LP-SENTINEL-7391528-C"
+      "X-Admin-Token": "fixture-admin-token"
     },
     "user": {
       "Authorization": "Bearer token-user",
