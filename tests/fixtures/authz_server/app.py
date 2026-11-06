@@ -520,7 +520,7 @@ async def handle_admin_report(request: Request) -> Response:
     identity = get_identity(request)
     profile = get_profile(request)
     data = {"report": "admin-only", "admin_canary": "admin-canary-7391528-B",
-            "detail": "LP-SENTINEL-7391528-B"}
+            "detail": "LP-SENTINEL-7391528-C"}
     if profile == "bfla_unauthenticated_leak" and identity is None:
         return JSONResponse(data, status_code=200)
     if identity is None:

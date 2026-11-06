@@ -2,6 +2,10 @@
 
 | Check | Fingerprint `check_type` | CWE | Default CVSS | Rationale |
 | --- | --- | --- | --- | --- |
+BFLA is **validated on fixtures only; not yet benchmarked on real targets**.
+
+`check: mass_assignment` and `check: business_limit` are **experimental, untested; require --experimental**.
+
 | BFLA | `bfla` | 285 | `AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:N` | A low-privilege identity can read or invoke a function reserved for another role. |
 | Mass assignment | `mass_assignment` | 915 | `AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:N` | An authenticated user can persist privileged fields through an otherwise legitimate request. |
 | Business limit | `business_limit` | 840 | `AV:N/AC:L/PR:L/UI:N/S:U/C:N/I:H/A:N` | Integrity of a declared financial/business invariant is lost without confidentiality impact. |

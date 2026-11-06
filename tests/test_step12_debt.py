@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
@@ -50,6 +52,29 @@ def test_identification_headers_on_every_request_kind(kind):
         assert all(r.headers["x-ledgerprobe-run"] == HEADERS["X-LedgerProbe-Run"] for r in seen)
 
 
+def _auth_file(tmp_path, environment):
+    path = tmp_path / f"auth-{environment}.yaml"
+    path.write_text(json.dumps({"schema_version": "ledgerprobe-auth/1", "identities": {
+        "owner": {"provider": "static_header", "environment": environment,
+                  "params": {"header": "Authorization", "value_ref": "env:LP_OWNER_TOKEN"}},
+        "other": {"provider": "static_header", "environment": environment,
+                  "params": {"header": "Authorization", "value_ref": "env:LP_OTHER_TOKEN"}},
+    }}))
+    return path
+
+
+@pytest.mark.parametrize("environment", ["lab", "staging"])
+def test_environment_matrix_real_identity_proceeds(tmp_path, environment, monkeypatch):
+    monkeypatch.setenv("LP_OWNER_TOKEN", "test-owner-token")
+    monkeypatch.setenv("LP_OTHER_TOKEN", "test-other-token")
+    auth = _auth_file(tmp_path, environment)
+    code, _, _ = scan(tmp_path, lambda request: httpx.Response(
+        403 if request.headers["Authorization"] == "test-other-token" else 200),
+        inputs={"variables": {"id": "object-1"}},
+        extra=("--auth", str(auth), "--environment", environment, "--read-only"))
+    assert code == 0
+
+
 def test_mid_race_kill_restores_and_skips_with_exit_four(tmp_path):
     marker = tmp_path / "STOP"
     rule = load_rules([Path("tests/fixtures/race_server/rules_race_wallet.yaml")])[0]
@@ -94,7 +119,25 @@ def test_mid_race_kill_restores_and_skips_with_exit_four(tmp_path):
     assert requests[-1] == "/race/reset"  # restore, after the kill
     assert (stop.status, stop.reason) == ("skipped", "kill_switch")
     assert marker.exists()
-    assert ledgerprobe  # CLI maps kill_switch to exit 4; covered by test_kill_file_skips_remaining_rules_and_exits_four
+    # The CLI's kill-switch exit contract for the same SKIPPED result.
+    result = {"rule_id": "race", "name": "Race", "severity": "high",
+              "owasp_category": "API6:2023", "cvss_score": 8.1, "method": "POST",
+              "path": "/race/wallet/spend", "path_template": "/race/wallet/spend",
+              "check_type": "race", "status": "skipped", "verdict": "SKIPPED",
+              "reason": "kill_switch", "message": "Kill switch is active."}
+    args = ledgerprobe.arguments([
+        "--spec", "missing", "--rules", "tests/fixtures/race_server/rules_race_wallet.yaml",
+        "--environment", "lab"])
+    async def fake_run_rules(*args, **kwargs):
+        return [result]
+    async def scenario():
+        with patch.object(ledgerprobe, "load_inventory", AsyncMock(return_value={
+                "base_url": "https://race.test", "endpoints": [], "graph": []})), \
+             patch.object(ledgerprobe, "run_rules", side_effect=fake_run_rules), \
+             patch.object(ledgerprobe, "GuardedClient", side_effect=lambda **kw: GuardedClient(
+                 base_url="https://race.test", transport=httpx.MockTransport(lambda r: httpx.Response(200)))):
+            return await ledgerprobe.execute(args)
+    assert asyncio.run(scenario()) == 4
 
 
 @pytest.mark.parametrize("environment", ["lab", "staging"])
