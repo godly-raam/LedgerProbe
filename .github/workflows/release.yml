@@ -12,7 +12,7 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v4  # TODO: pin SHA
+      - uses: actions/checkout@v7  # TODO: pin SHA
       - uses: docker/login-action@v3  # TODO: pin SHA
         with:
           registry: ghcr.io
