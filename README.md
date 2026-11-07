@@ -7,7 +7,7 @@ LedgerProbe is an API authorization and business-logic testing engine. It reads 
 
 ## Results first
 
-Counts are `TP/FP/TN/FN/INC_vuln/INC_safe`. `INCONCLUSIVE` is never counted as correct. The v1 number is the pre-tuning result; **v2 and v3 rules were authored after viewing earlier results**. This is a same-author benchmark with no confidence intervals and a small sample: **23 cases across 18 distinct endpoints**. VAmPI contributes 13 cases over 8 endpoints in both target modes; crAPI contributes 10 cases. The v3 legacy rows are the recorded v2 runs, not a v3 replay.
+Counts are `TP/FP/TN/FN/INC_vuln/INC_safe`. `INCONCLUSIVE` is never counted as correct. The v1 number is the pre-tuning result; **v2 and v3 rules were authored after viewing earlier results**. This is a same-author benchmark with no confidence intervals and a small sample: **23 cases across 18 distinct endpoints**. VAmPI contributes 13 cases over 8 endpoints in both target modes; crAPI contributes 10 cases. Legacy rows were recorded at v1 and not re-run for v2/v3. The v3 differential row was re-run.
 
 | Target | Mode | v1 | v2 | v3 |
 | --- | --- | --- | --- | --- |
@@ -37,9 +37,10 @@ python3 -m venv .venv
 python -m pip install -e ".[dev]"
 ```
 
-Five-minute lab fixture demo. Start the fixture and prepare synthetic credentials:
+Five-minute lab fixture demo. Start the fixture, then prepare the spec and auth references. The demo password is read from `LEDGERPROBE_DEMO_PASSWORD` at scan time and is not written to disk:
 
 ```bash
+export LEDGERPROBE_DEMO_PASSWORD=demo1234
 docker compose up -d --build --wait mock-bank-api
 curl --fail http://127.0.0.1:8000/health
 .venv/bin/python -m examples.prepare_demo \
@@ -53,6 +54,7 @@ Then run the read-only differential policy. The lab is intentionally vulnerable,
   --spec .demo/quickstart/openapi.json \
   --base-url http://127.0.0.1:8000 \
   --rules rulesets/abac_isolation.yaml \
+  --auth .demo/quickstart/ledgerprobe-auth.yaml \
   --inputs .demo/quickstart/inputs.json \
   --read-only --max-rps 5 \
   --sarif .demo/quickstart/results.sarif \
@@ -65,7 +67,6 @@ Real output from this workspace:
 [*] 11 endpoints; 0 dependency candidates
 [failed] bola-cross-tenant-access GET /api/v1/family/allowance/{teen_id}: Forbidden response reproducibly exposed owner-object evidence.
 [+] SARIF: .demo/quickstart/results.sarif; {'failed': 1}
-[!] legacy_static_credentials: inputs.json static contexts are deprecated
 ```
 
 Stop the fixture with `docker compose down`.
@@ -124,7 +125,7 @@ See [`docs/INTEGRATIONS.md`](docs/INTEGRATIONS.md) for configuration and [`docs/
 - **Environment gating:** production read-only requires an explicit flag; production mutation/race is hard-blocked.
 - **Kill switch:** `--kill-file` stops before the next request, runs pending restores, skips remaining rules, writes reports, and exits 4.
 - **Identification:** every request carries `User-Agent: LedgerProbe/<version>` and `X-LedgerProbe-Run: <run_id>`.
-- **Secrets:** resolved tokens stay in process memory; reports and logs retain allowlisted evidence only, never credential values.
+- **Secrets:** tokens and secrets are never written to disk or reports by the engine; lab fixtures may use static test credentials.
 
 ## Limitations
 

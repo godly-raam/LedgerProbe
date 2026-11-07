@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -52,8 +53,9 @@ def seed(db: Session) -> None:
     if db.scalar(select(User).limit(1)) is not None:
         return
 
+    password = os.environ.get("MOCK_BANK_PASSWORD", DEMO_PASSWORD)
     for spec in SEED_USERS:
-        db.add(User(**spec, password_hash=hash_password(DEMO_PASSWORD)))
+        db.add(User(**spec, password_hash=hash_password(password)))
     db.flush()
 
     for spec in ALLOWANCES:

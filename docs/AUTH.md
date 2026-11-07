@@ -36,9 +36,10 @@ teardown:
   env: ["PATH"]
 ```
 
-Run with `--auth ledgerprobe-auth.yaml`. Legacy `inputs.json` contexts still
-work, but print `legacy_static_credentials`; `--strict-auth` turns that into a
-configuration error.
+The quick start uses `--auth ledgerprobe-auth.yaml`. Legacy `inputs.json`
+contexts remain available for migration only and are documented here, not in
+the quick start; they print `legacy_static_credentials`, and `--strict-auth`
+turns that into a configuration error.
 
 ## Providers
 

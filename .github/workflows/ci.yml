@@ -159,10 +159,12 @@ jobs:
           PY
 
           cd ..
+          export LEDGERPROBE_DEMO_PASSWORD=demo1234
           python -m examples.prepare_demo --base-url http://127.0.0.1:8000
           scan_status=0
           python ledgerprobe.py --spec .demo/openapi.json \
             --base-url http://127.0.0.1:8000 --rules rulesets/abac_isolation.yaml \
+            --auth .demo/ledgerprobe-auth.yaml \
             --inputs .demo/inputs.json --read-only --max-rps 5 \
             --sarif logic-fuzzer/reports/results.sarif \
             --junit logic-fuzzer/reports/results.xml || scan_status=$?
