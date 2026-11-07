@@ -2,6 +2,7 @@ import Link from "next/link";
 import { ArrowLeft, ShieldAlert } from "lucide-react";
 
 import { PermissionGraph } from "@/components/PermissionGraph";
+import { SampleBanner } from "@/components/SampleBanner";
 import { formatDate, getReports, pickReport } from "@/lib/reports";
 
 export const dynamic = "force-dynamic";
@@ -12,7 +13,7 @@ export default async function GraphPage({
   searchParams: Promise<{ run?: string }>;
 }) {
   const params = await searchParams;
-  const { reports } = getReports();
+  const { reports, live } = getReports();
   const report = pickReport(reports, params.run);
   const exploited = report.graph.edges.filter((edge) => edge.finding_id).length;
 
@@ -26,6 +27,8 @@ export default async function GraphPage({
         Back to overview
       </Link>
 
+      <SampleBanner live={live} />
+
       <section className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
         <div>
           <p className="eyebrow">Permission graph</p>
@@ -33,8 +36,8 @@ export default async function GraphPage({
             Parent-child authorization paths
           </h1>
           <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-400">
-            Each edge is a request the fuzzer made during this run. Red edges succeeded across a
-            family boundary; select one to see the mapped finding.
+            Each edge is a request made during this run. Red edges succeeded across a family
+            boundary; select one to see the mapped finding.
           </p>
         </div>
         <div className="flex items-center gap-4 text-xs text-slate-500 lg:text-right">

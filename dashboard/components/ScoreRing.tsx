@@ -8,7 +8,7 @@ export function ScoreRing({ score, grade }: { score: number; grade: string }) {
 
   return (
     <div className="relative h-[148px] w-[148px] shrink-0">
-      <svg viewBox="0 0 148 148" className="h-full w-full -rotate-90" role="img" aria-label={`Security score ${score} of 100`}>
+      <svg viewBox="0 0 148 148" className="h-full w-full -rotate-90" role="img" aria-label={`Legacy lab score ${score}`}>
         <circle cx="74" cy="74" r={radius} fill="none" stroke="#1c2634" strokeWidth="9" />
         <circle
           cx="74"

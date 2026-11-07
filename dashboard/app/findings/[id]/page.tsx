@@ -11,6 +11,7 @@ import {
   Waypoints,
 } from "lucide-react";
 
+import { SampleBanner } from "@/components/SampleBanner";
 import { SeverityBadge } from "@/components/SeverityBadge";
 import { findFinding, formatCents, formatDate, getReports } from "@/lib/reports";
 import { suiteLabels } from "@/lib/ui";
@@ -31,7 +32,7 @@ export default async function FindingPage({
 }) {
   const { id } = await params;
   const { run: runId } = await searchParams;
-  const { reports } = getReports();
+  const { reports, live } = getReports();
   const match = findFinding(reports, decodeURIComponent(id), runId);
 
   if (!match) notFound();
@@ -49,6 +50,8 @@ export default async function FindingPage({
         <ArrowLeft className="h-3.5 w-3.5" />
         Back to overview
       </Link>
+
+      <SampleBanner live={live} />
 
       <section className="grid gap-4 lg:grid-cols-12">
         <div className="panel p-6 lg:col-span-8">

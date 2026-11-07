@@ -1,0 +1,21 @@
+{
+  "sample": {
+    "cases": 23,
+    "endpoints": 18,
+    "note": "Same-author, source-derived sample. No confidence intervals."
+  },
+  "rows": [
+    { "target": "VAmPI", "mode": "legacy_strict", "v1": [8, 5, 0, 0, 0, 0], "v2": [8, 5, 0, 0, 0, 0], "v3": [8, 5, 0, 0, 0, 0] },
+    { "target": "VAmPI", "mode": "legacy_lenient", "v1": [8, 4, 1, 0, 0, 0], "v2": [8, 4, 1, 0, 0, 0], "v3": [8, 4, 1, 0, 0, 0] },
+    { "target": "VAmPI", "mode": "differential", "v1": [7, 0, 3, 0, 1, 2], "v2": [7, 0, 4, 0, 1, 1], "v3": [8, 0, 5, 0, 0, 0] },
+    { "target": "crAPI", "mode": "legacy_strict", "v1": [4, 4, 0, 0, 1, 1], "v2": [4, 4, 0, 0, 1, 1], "v3": [4, 4, 0, 0, 1, 1] },
+    { "target": "crAPI", "mode": "legacy_lenient", "v1": [5, 4, 1, 0, 0, 0], "v2": [5, 4, 1, 0, 0, 0], "v3": [5, 4, 1, 0, 0, 0] },
+    { "target": "crAPI", "mode": "differential", "v1": [3, 0, 1, 0, 2, 4], "v2": [5, 0, 4, 0, 0, 1], "v3": [5, 0, 4, 0, 0, 1] }
+  ],
+  "notes": [
+    "Counts are TP/FP/TN/FN/INC_vuln/INC_safe.",
+    "v2 and v3 rules were authored after viewing earlier results; v1 is the pre-tuning number.",
+    "The v3 legacy rows are the recorded v2 runs, not a v3 replay.",
+    "crapi-order-object is a reduced-confidence FAIL because its nonexistent-object control returned 500."
+  ]
+}

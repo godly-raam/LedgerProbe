@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 
 import { FindingsList } from "@/components/FindingsList";
+import { SampleBanner } from "@/components/SampleBanner";
 import { OwaspChart } from "@/components/OwaspChart";
 import { ScoreRing } from "@/components/ScoreRing";
 import { SeverityBadge } from "@/components/SeverityBadge";
@@ -43,12 +44,11 @@ export default async function OverviewPage({
         <div>
           <p className="eyebrow">Audit overview</p>
           <h1 className="mt-2 text-2xl font-semibold tracking-tight text-white sm:text-3xl">
-            Neobank attack surface
+            Lab attack surface
           </h1>
           <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-400">
-            Stateful object-authorization, merchant-category, and concurrency probes against the
-            FinShield mock bank. Findings are reproducible, scored with CVSS 3.1, and mapped to the
-            OWASP API Security Top 10.
+            Object-authorization, merchant-category, and concurrency probes from the local
+            mock-bank fixture. Reports map findings to CVSS 3.1 and the OWASP API Security Top 10.
           </p>
         </div>
 
@@ -61,7 +61,7 @@ export default async function OverviewPage({
             }`}
           >
             <span className={`h-1.5 w-1.5 rounded-full ${live ? "bg-teal-300" : "bg-sky-300"}`} />
-            {live ? "Live report directory" : "Bundled sample report"}
+            {live ? "Live report directory" : "Sample data from the local lab"}
           </span>
           <div className="text-xs leading-5 text-slate-500 lg:text-right">
             <p className="font-mono text-slate-300">{run.id}</p>
@@ -73,6 +73,8 @@ export default async function OverviewPage({
         </div>
       </section>
 
+      <SampleBanner live={live} />
+
       <section className="grid gap-4 lg:grid-cols-12">
         <div className="panel relative overflow-hidden p-6 lg:col-span-4">
           <div
@@ -81,7 +83,7 @@ export default async function OverviewPage({
           />
           <div className="relative">
             <div className="flex items-center justify-between">
-              <p className="eyebrow">Security score</p>
+              <p className="eyebrow">Legacy lab score (not benchmark)</p>
               <span className="pill border-white/10 bg-white/[0.04] text-slate-400">
                 {scoreVerdict(run.score)}
               </span>
@@ -138,7 +140,7 @@ export default async function OverviewPage({
             <StatCard
               label="Findings"
               value={totalFindings}
-              hint="Reproducible issues in this run"
+              hint="Finding records in this report"
               tone="rose"
               icon={CircleAlert}
             />
@@ -289,7 +291,7 @@ export default async function OverviewPage({
             <div>
               <h2 className="text-sm font-semibold text-white">Findings</h2>
               <p className="mt-0.5 text-[11px] text-slate-500">
-                Each finding includes captured traffic and a vulnerable/secure patch pair
+                Sample findings include captured local-fixture traffic and a patch pair
               </p>
             </div>
             <span className="pill border-white/10 bg-white/[0.03] text-slate-400">
@@ -346,7 +348,7 @@ export default async function OverviewPage({
             {!live && (
               <p className="mt-3 border-t border-white/[0.06] pt-3 text-[10px] leading-4 text-slate-500">
                 Live reports are read from <code className="text-slate-400">logic-fuzzer/reports</code>.
-                Run the fuzzer to replace this sample.
+                Run the lab harness to replace this sample.
               </p>
             )}
           </div>

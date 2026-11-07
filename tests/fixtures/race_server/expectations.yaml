@@ -17,14 +17,14 @@ wallet_race_safe:
   extra_args: ["--allow-mutations"]
   description: "Atomic wallet debit accepts one request and one debit"
 
-wallet_race_vulnerable_narrow:
+wallet_race_vulnerable_narrow_deterministic:
   category: vulnerable
   expected_verdict: FAIL
   expected_reason: race_invariant_violated
   expected_note: null
   rule_file: rules_race_wallet.yaml
   extra_args: ["--allow-mutations"]
-  description: "Check-then-act wallet debit with only a yield between check and debit"
+  description: "CI-only deterministic narrow window with a fixture-side release barrier"
 
 coupon_single_use_vulnerable:
   category: vulnerable

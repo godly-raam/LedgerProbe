@@ -20,7 +20,7 @@ from tests.test_race import _start
 
 FIXTURES = Path(__file__).parent / "fixtures" / "race_server"
 MODES = ("burst", "last_byte")
-PROFILES = ("wallet_race_vulnerable", "wallet_race_vulnerable_narrow")
+PROFILES = ("wallet_race_vulnerable", "wallet_race_vulnerable_narrow_deterministic")
 
 
 async def one_mode(port: int, profile: str, mode: str, runs: int = 20):
@@ -77,7 +77,7 @@ async def main():
         hits = row["first_hit_rounds"]
         first = f"{min(hits)}" if hits else "none"
         spread = f"{row['median_spread_ms']:.6f}" if row["median_spread_ms"] is not None else "n/a"
-        label = "wide (30 ms)" if row["profile"].endswith("vulnerable") else "narrow (yield)"
+        label = "wide (30 ms)" if row["profile"].endswith("vulnerable") else "narrow (deterministic)"
         print(f"| {label} | `{row['mode']}` | {row['fails']}/{row['runs']} | "
               f"{row['fail_rate'] * 100:.0f}% | {spread} | {first} |")
     print(f"\nh2_single_packet: {'available but not tested' if h2_available else 'not tested (h2 unavailable)'}")

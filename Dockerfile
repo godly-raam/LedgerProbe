@@ -14,10 +14,10 @@ RUN python -m pip wheel --no-cache-dir --wheel-dir /wheels . \
 FROM python:3.12-slim@sha256:4840d514c583a4d3d8cad3940e68dee6f0f6f3635c12fcd0a3d74c21a5b93a54
 
 LABEL org.opencontainers.image.title="LedgerProbe" \
-      org.opencontainers.image.description="Specification-driven API security checks" \
+      org.opencontainers.image.description="API authorization and business-logic testing engine" \
       org.opencontainers.image.source="https://github.com/godly-raam/LedgerProbe" \
       org.opencontainers.image.version="1.1.0" \
-      org.opencontainers.image.licenses="UNLICENSED"
+      org.opencontainers.image.licenses="MIT"
 
 ENV PATH="/opt/venv/bin:${PATH}" \
     PYTHONDONTWRITEBYTECODE=1 \

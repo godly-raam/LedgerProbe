@@ -134,9 +134,8 @@ BOLA candidate.
   reviewed against the application's ownership model.
 - GraphQL rules, pagination discovery, stateful workflows, and multi-tenant
   role models are not inferred.
-- mitmproxy flow import is coded behind an optional dependency, but this
-  workspace does not install `mitmproxy`; use HAR or Postman here. If the
-  optional dependency is installed in a deployment image, the command shape is
-  `ledgerprobe import mitm --role ... --include-host ... --out ...`.
+- mitmproxy flow import is experimental and untested: it is coded behind an
+  optional dependency, but this workspace does not install `mitmproxy` and has
+  no test for that path; use HAR or Postman here.
 - Generated artifacts are not a substitute for a reviewed OpenAPI contract or
   an authorization design review.

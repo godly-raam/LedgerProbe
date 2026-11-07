@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "ledgerprobe"
 dynamic = ["version"]
-description = "Specification-driven API security checks"
+description = "API authorization and business-logic testing engine"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

@@ -11,7 +11,7 @@ export function FindingsList({ report }: { report: AuditReport }) {
       <div className="mt-5 flex flex-col items-center justify-center rounded-xl border border-dashed border-teal-300/20 bg-teal-300/[0.03] px-6 py-10 text-center">
         <p className="text-sm font-medium text-teal-200">No findings in this run</p>
         <p className="mt-1 max-w-sm text-xs text-slate-500">
-          Every authorization, MCC, and concurrency check was blocked by the target.
+          Every check in this report recorded no finding.
         </p>
       </div>
     );

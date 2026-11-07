@@ -2,13 +2,13 @@
 
 | Check | Fingerprint `check_type` | CWE | Default CVSS | Rationale |
 | --- | --- | --- | --- | --- |
-BFLA is **validated on fixtures only; not yet benchmarked on real targets**.
-
-`check: mass_assignment` and `check: business_limit` are **experimental, untested; require --experimental**.
-
 | BFLA | `bfla` | 285 | `AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:N` | A low-privilege identity can read or invoke a function reserved for another role. |
 | Mass assignment | `mass_assignment` | 915 | `AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:N` | An authenticated user can persist privileged fields through an otherwise legitimate request. |
 | Business limit | `business_limit` | 840 | `AV:N/AC:L/PR:L/UI:N/S:U/C:N/I:H/A:N` | Integrity of a declared financial/business invariant is lost without confidentiality impact. |
+
+BFLA is **validated on fixtures only; not yet benchmarked on real targets**.
+
+`check: mass_assignment` and `check: business_limit` are **experimental, untested; require --experimental**. Their loader gates are tested; their execution paths are not.
 
 ## BFLA
 
@@ -58,5 +58,7 @@ Each case becomes `<rule_id>#<case>`. `over_per_txn_limit` is rejected during
 loading unless the author declares `per_txn_max`; the engine never guesses a
 business boundary. There are no boundary-accept cases.
 
-All three honor `mutating`, `--allow-mutations`, `--allow-host`, `restore`,
-`--read-only`, `--kill-file`, and the production hard block.
+BFLA honors `mutating`, `--allow-mutations`, `--allow-host`, `restore`,
+`--read-only`, `--kill-file`, and the production hard block. The two
+experimental checks share the loader-level mutation, restore, and
+`--experimental` gates; their execution paths are not tested.

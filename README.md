@@ -1,555 +1,158 @@
-# LedgerProbe-Core
+# LedgerProbe
 
-[![LedgerProbe-Core CI](https://github.com/godly-raam/LedgerProbe/actions/workflows/ci.yml/badge.svg)](https://github.com/godly-raam/LedgerProbe/actions/workflows/ci.yml)
+[![CI](https://github.com/godly-raam/LedgerProbe/actions/workflows/ci.yml/badge.svg)](https://github.com/godly-raam/LedgerProbe/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-**An automated authorization-logic, race-condition, and SIM-binding security harness for neobank architectures.**
+LedgerProbe is an API authorization and business-logic testing engine. It reads an OpenAPI, Swagger, or Postman document plus YAML policies, then compares an owner's successful baseline with a forbidden identity, negative controls, unauthenticated controls, and owner-specific canaries before it emits a verdict. The difference is the evidence discipline: differential checks with controls, PASS / FAIL / INCONCLUSIVE verdicts, and reports that retain only allowlisted metadata. `mock-bank-api` is a local test fixture, not the product.
 
-LedgerProbe-Core is a self-contained lab. It ships an intentionally vulnerable parent–teen neobank API, a stateful fuzzer that proves the flaws with captured traffic, an Android attestation inspector, and a Next.js console that turns the JSON reports into an executive view, a permission graph, and side-by-side patches.
+## Results first
 
-**LedgerProbe** is the target-agnostic security automation engine in this repository. Its separate CLI consumes API specifications and YAML policies without importing bank-specific routes or login logic. The original lab fuzzer and dashboard report format remain compatible.
+Counts are `TP/FP/TN/FN/INC_vuln/INC_safe`. `INCONCLUSIVE` is never counted as correct. The v1 number is the pre-tuning result; **v2 and v3 rules were authored after viewing earlier results**. This is a same-author benchmark with no confidence intervals and a small sample: **23 cases across 18 distinct endpoints**. VAmPI contributes 13 cases over 8 endpoints in both target modes; crAPI contributes 10 cases. The v3 legacy rows are the recorded v2 runs, not a v3 replay.
 
-> **Authorized lab only.** Every account and dollar in this repository is synthetic. The API ships with deliberate vulnerabilities and a dev JWT secret. Never expose it to a network or reuse its code in a real bank. See [Safety and limitations](#safety-and-limitations).
+| Target | Mode | v1 | v2 | v3 |
+| --- | --- | --- | --- | --- |
+| VAmPI | `legacy_strict` | 8/5/0/0/0/0 | 8/5/0/0/0/0 | 8/5/0/0/0/0 |
+| VAmPI | `legacy_lenient` | 8/4/1/0/0/0 | 8/4/1/0/0/0 | 8/4/1/0/0/0 |
+| VAmPI | `differential` | 7/0/3/0/1/2 | 7/0/4/0/1/1 | 8/0/5/0/0/0 |
+| crAPI | `legacy_strict` | 4/4/0/0/1/1 | 4/4/0/0/1/1 | 4/4/0/0/1/1 |
+| crAPI | `legacy_lenient` | 5/4/1/0/0/0 | 5/4/1/0/0/0 | 5/4/1/0/0/0 |
+| crAPI | `differential` | 3/0/1/0/2/4 | 5/0/4/0/0/1 | 5/0/4/0/0/1 |
 
----
-
-## Architecture
-
-```mermaid
-flowchart LR
-    subgraph Harness
-        FZ[logic-fuzzer<br/>asyncio + httpx]
-        MH[mobile-harness<br/>Frida + ADB]
-    end
-
-    subgraph Target
-        API[mock-bank-api<br/>FastAPI + SQLite]
-        DB[(SQLite)]
-        APP[Mock banking app<br/>not bundled]
-    end
-
-    subgraph Evidence
-        REP[(logic-fuzzer/reports/*.json)]
-        MREP[(mobile-harness/reports/*.json)]
-        UI[dashboard<br/>Next.js + Recharts]
-    end
-
-    FZ -->|JWT-scoped attack traffic| API
-    API --- DB
-    MH -->|hooks telemetry| APP
-    FZ --> REP
-    MH --> MREP
-    REP -->|mounted at /reports| UI
-```
-
-Four modules:
-
-| Module | Stack | Role |
-| --- | --- | --- |
-| [`mock-bank-api`](mock-bank-api) | FastAPI, SQLAlchemy, SQLite, PyJWT | Parent/teen bank with toggleable BOLA, MCC, race, and SIM-swap flaws |
-| [`logic-fuzzer`](logic-fuzzer) | Python 3.11+, asyncio, httpx | Stateful BOLA/IDOR, MCC mutation, and concurrent-payment checks |
-| [`mobile-harness`](mobile-harness) | Python, Frida, ADB | Hooks telephony/keystore calls and scores attestation resilience |
-| [`dashboard`](dashboard) | Next.js 16, Tailwind, Recharts, Lucide | Executive summary, permission graph, remediation viewer |
-
-### Repository layout
-
-```text
-LedgerProbe-core/
-├── docker-compose.yml
-├── README.md
-├── ledgerprobe.py            # target-agnostic scan CLI
-├── requirements.txt          # engine dependencies
-├── pkg/
-│   ├── parser/               # OpenAPI/Swagger/Postman inventory + graph
-│   ├── rules/                # YAML policies, assertions, scoped execution state
-│   ├── reporter/             # SARIF, JUnit, Slack/Teams/Jira/Linear
-│   └── guardrails/           # rate limiting, adaptive admission, read-only mode
-├── rulesets/                 # example isolation and quota-response policies
-├── examples/                 # auth-input template and lab-only setup
-├── tests/                    # engine tests, no external target required
-├── mock-bank-api/
-│   ├── app/                  # FastAPI app, models, auth, routes
-│   ├── tests/test_lab.py     # 7 tests covering every toggle
-│   ├── config.json           # vulnerability toggles
-│   ├── Dockerfile
-│   └── requirements.txt
-├── logic-fuzzer/
-│   ├── main.py               # CLI entrypoint
-│   ├── fuzzer/               # HTTP client, suites, CVSS catalog, reports
-│   ├── reports/              # generated audit reports
-│   └── Dockerfile
-├── mobile-harness/
-│   ├── runner.py             # simulate or device mode + scoring
-│   ├── scripts/sim_hook.js   # Frida hooks
-│   ├── tests/test_scoring.py
-│   └── requirements.txt
-└── dashboard/
-    ├── app/                  # overview, finding detail, permission graph
-    ├── components/
-    ├── lib/
-    ├── data/sample-report.json
-    └── Dockerfile
-```
-
----
-
-## LedgerProbe: specification-driven scans
-
-Requires Python 3.11+. Install from the repository root:
-
-```bash
-python -m pip install -r requirements.txt
-python ledgerprobe.py --help
-```
-
-Prepare a JSON variables file using [`examples/inputs.json`](examples/inputs.json), or use the pluggable
-providers in [`docs/AUTH.md`](docs/AUTH.md) so tokens never enter a file. Legacy
-`inputs.json` contexts still work with a `legacy_static_credentials` warning;
-`--strict-auth` rejects them.
-
-```bash
-python ledgerprobe.py \
-  --spec ./openapi.yaml \
-  --base-url https://staging.example.com \
-  --rules rulesets/abac_isolation.yaml \
-  --inputs /secure/scan-inputs.json \
-  --read-only --max-rps 5 --concurrency 4 \
-  --sarif results.sarif --junit results.xml
-```
-
-Adapt the rule's `target_endpoints` and parameter names to your inventory; the bundled isolation rule targets the lab API, not arbitrary services. `--spec` also accepts an HTTP(S) URL, Swagger 2.0, OpenAPI 3.0/3.1 JSON/YAML, or a Postman Collection 2.1 file. The engine validates OpenAPI and normalizes Postman folders, variables, requests, bodies, and authentication metadata. Authentication metadata is **not** automatically used as credentials: use `--auth` with [`docs/AUTH.md`](docs/AUTH.md), or legacy named header contexts explicitly.
-
-The spec's server is used unless `--base-url` explicitly overrides **all** servers. A missing/relative server needs an override. Differing operation-level servers fail closed rather than silently sending credentials to a second target. Only scan trusted specs and rules against authorized targets; this is not a network sandbox. External `$ref` documents must be bundled into local references before scanning.
-
-### Policies and stateful dependencies
-
-```yaml
-id: bola-cross-tenant-access
-name: Broken Object Level Authorization Audit
-severity: HIGH
-owasp_category: API1:2023
-cvss_score: 8.1
-target_endpoints:
-  - path: /objects/{object_id}
-    method: GET
-auth_contexts:
-  primary: owner
-  forbidden: other_tenant
-parameters:
-  path:
-    object_id: "{{object_id}}"
-assertions:
-  - type: status_code
-    expected: 403
-  - type: body
-    path: error.code
-    expected: forbidden
-```
-
-Optional `remediation` is a nonempty rule string copied into tracker ticket bodies only; it is never sent to the scan target.
-
-The bundled `abac_isolation.yaml` uses opt-in differential evidence: accepted denials, owner canaries/unique value overlap, nonexistent-object and unauthenticated controls, and two confirmation repeats before FAIL. Ambiguous success, overload, and timeout responses are INCONCLUSIVE rather than security findings. `rulesets/legacy_status_only.yaml` preserves the original status-only policy. See the [differential rule contract](pkg/rules/README.md#differential-abac-isolation-extension) for verdicts, reason codes, and privacy-safe evidence.
-
-Race checks are validated on fixtures only. No documented race cases were found in VAmPI or crAPI, so this repository does not claim a live race benchmark against either target. See [`docs/RACE.md`](docs/RACE.md) for synchronization modes, invariants, verdicts, and the local detection study.
-
-Input JSON has `contexts` (named HTTP-header maps) and `variables` (JSON values). Assertions support status codes, named headers, JSON field equality, existence, and types. YAML loading rejects unsafe constructors, duplicate keys, unknown fields, and malformed policies. See [`pkg/rules/README.md`](pkg/rules/README.md) for the full format, body/parameter inputs, and execution contract.
-
-A primary-context request must succeed with 2xx before replaying the **same object inputs** under the forbidden context. Missing credentials, unresolved inputs, unsuccessful baselines, dependency cycles, or ambiguous mappings are execution errors, not vulnerability findings. Omitting `primary` allows single-request legacy checks without a baseline; differential rules require both primary and forbidden contexts. Reports exclude tokens, response bodies, expanded object IDs, and exception text; do not put secrets in rule metadata or endpoint templates.
-
-The parser builds candidate graph edges from exact response field/leaf names to path/query inputs and required top-level JSON body properties. Missing required inputs can run their declared producer under the primary identity; successful responses are cached by operation **and identity** for that scan. Forbidden responses never update state. Multiple producers fail closed; arrays are not arbitrarily reduced to their first item. Renamed IDs need explicit variables rather than guessed `id` → `wallet_id` aliases. Only selected rule targets and necessary dependencies are executed. Full JSON Schema evaluation, non-JSON request serialization, and automatic OAuth/login flows are not implemented; unsupported required inputs fail closed.
-
-### Safety and CI behavior
-
-- Every engine HTTP operation, including spec retrieval, dependencies, and optional notifications, uses `GuardedClient`. Redirects and automatic retries are disabled.
-- `--max-rps` sets a shared token bucket with one initial token, preventing startup bursts. `--concurrency` is an admission ceiling; current rule execution is deliberately sequential.
-- A 429 halves the admission limit immediately; a window with at least five responses and at least 50% 5xx also halves it. Twenty successful responses recover one slot. `Retry-After` applies a shared cooldown capped at 60 seconds; 429 without a valid header pauses for one second. In-flight requests are not cancelled.
-- `--read-only` permits only GET, HEAD, and OPTIONS, including dependencies. An explicit `--allow-mutation 'POST:/exact/url-encoded/path'` exception permits that method/path, not a wildcard or template. Read-only cannot guarantee a misdesigned GET endpoint is side-effect-free.
-- Exit codes: **0** completed checks passed or were inconclusive; **1** policy failure (or inconclusive with `--fail-on-inconclusive`); **2** configuration/execution/notification error or no executable checks. Individual safety/absent-endpoint skips are visible in JUnit; partial scans can include skips and still pass.
-- The legacy `logic-fuzzer/main.py` remains a **destructive lab-only legacy path**. It now refuses non-loopback targets and requires `--allow-mutations`; it does not go through the LedgerProbe race engine.
-
-SARIF 2.1.0 includes rule/CVSS/OWASP metadata, `lp1` stable fingerprints, logical endpoint locations, suppressions, and execution/baseline/suppression notifications. Local spec files inside this repository also receive a physical spec-file location, without invented line numbers. GitHub Code Scanning can ingest SARIF; use a checked-in spec for source-linked alerts. URL/external specs have endpoint-only locations, so source-code UI presentation may be limited. Upload JUnit XML through your CI's normal test-results publisher. **GitLab's native security dashboard requires GitLab-specific security-report JSON; SARIF is not a substitute for that schema.**
-
-### Versioned results, suppressions, and baselines
-
-Add `--json results.json` to emit the versioned JSON document defined by [`schemas/results.schema.json`](schemas/results.schema.json). Its `schema_version` is `ledgerprobe-results/1`; findings carry `lp1:` fingerprints, CVSS 3.1 vector/score/rating, confidence, and allowlisted evidence. The run target is a separate top-level `target` field, never part of a fingerprint. Only path templates, role names, counts, hashes, and statuses are retained; expanded object IDs, tokens, request bodies, and markers are not.
-
-`--suppressions .ledgerprobe-suppressions.yaml` accepts a strict list of external exceptions. Each entry needs `fingerprint`, a reason of at least 20 characters, `owner`, `created`, and `expires`; high/critical findings also need `ticket` and `approved_by`. Expiry is capped at 180 days by default (`--max-suppression-days`). An active entry makes the result `suppressed`: SARIF emits an external suppression, JUnit records a skip, JSON status is `suppressed`, and the finding no longer controls exit status. Expired entries count again and emit `suppression_expired`; unused entries emit `stale_suppression`, and `--fail-on-stale` makes that exit 1. ERROR results cannot be suppressed.
-
-```yaml
-- fingerprint: lp1:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
-  reason: Accepted temporary exception for the staging tenant
-  owner: security-team
-  created: 2026-11-01
-  expires: 2026-12-01
-  ticket: SEC-123
-  approved_by: security-lead
-```
-
-For CI gating, `--baseline old-results.json` classifies current findings as `new`, `unchanged`, or `resolved`. Only new and unchanged findings are emitted with a baseline flag. `--fail-on new` fails only on a new, non-suppressed FAIL; `--fail-on any` is the default; `--fail-on none` disables finding-based failure. Compare two saved documents without touching a target:
-
-```bash
-python ledgerprobe.py diff old-results.json new-results.json
-```
-
-The diff prints only new/resolved/unchanged fingerprints and rule IDs. A schema mismatch or unreadable baseline is a configuration error (exit 2), not a finding.
-
-CVSS is computed from a strict CVSS 3.1 base vector. Defaults are chosen per check type, and a rule can override them with `cvss: {vector, justification}`. The result JSON and SARIF `security-severity` use the computed score; a reduced-confidence finding keeps that score and reports confidence separately. The old `cvss_score` field remains accepted for compatibility but is deprecated and is not used for exit codes or headline output. The legacy logic-fuzzer 0-100 score/grade remains for its existing dashboard format, but is deprecated for LedgerProbe gating and is not used in LedgerProbe exit codes or headline output.
-
-### Optional notifications
-
-Pass `--webhooks /secure/webhooks.json` containing an array such as:
-
-```json
-[
-  {"kind": "slack", "url": "https://hooks.slack.com/services/REPLACE_ME"},
-  {"kind": "jira", "url": "https://example.atlassian.net/rest/api/3/issue",
-   "project": "SEC", "headers": {"Authorization": "Basic REPLACE_ME"}},
-  {"kind": "linear", "url": "https://api.linear.app/graphql",
-   "team_id": "REPLACE_ME", "headers": {"Authorization": "REPLACE_ME"}}
-]
-```
-
-Kinds: `slack`, `teams` (text-compatible incoming webhook), `jira` (Cloud REST v3 Task creation), `linear` (GraphQL issue creation), and `generic`. Only failed **HIGH/CRITICAL** checks are sent. URLs must use HTTPS except loopback development endpoints. These are explicit external POSTs even during read-only scans; a separate guarded notifier client permits them without relaxing target safety. This shares rule metadata and endpoint templates with the configured third parties, may incur service costs/rate limits, and needs provider credentials where applicable. Delivery is single-attempt, without deduplication; rerunning a scan can create duplicate tickets. Reports are written before notification, and notification failures return exit code 2.
-
-### Ticket lifecycle (Jira and Linear)
-
-The legacy webhook path above is unchanged and remains useful for simple notifications. Durable ticket lifecycle management is opt-in through `ledgerprobe-integrations.yaml` and `--tickets dry-run|apply|off` (default `dry-run`). `apply` is required for any tracker or Slack network call. The lifecycle is keyed by the `lp1:` fingerprint plus a configured target label, not by title or local state. It creates on the first FAIL, comments only on material confidence/CVSS/reason/evidence changes with a seven-day default cooldown, reopens and labels regressions, comments explicit retests, and can resolve after two marked PASS runs only when `auto_close: true`. INCONCLUSIVE and ERROR never create tickets; suppressed findings never create new tickets. A flood cap produces one summary ticket. Tracker failures are warnings (exit 3 only with `--fail-on-tracker-error`) and never change scan verdicts. See [`docs/INTEGRATIONS.md`](docs/INTEGRATIONS.md) for strict configuration, Jira/Linear examples, lifecycle details, and the PR dry-run/apply workflow.
-
-Suppression files are reviewed like code: [`.github/CODEOWNERS`](.github/CODEOWNERS) requires the security owner to review `.ledgerprobe-suppressions.yaml` and `rulesets/`. A merged PR is the approval record for a suppression; do not add an unreviewed suppression directly to `main`.
-
-### Demo and tests
-
-`./demo.sh` preserves the existing dashboard/mobile/logic audit and additionally downloads a local `.demo/openapi.json`, creates mode-0600 synthetic auth inputs, and runs a read-only LedgerProbe scan. Outputs include `logic-fuzzer/reports/results.sarif` and `results.xml`; expected lab findings do not stop the demo, but engine errors do. Install both lab and engine dependencies first:
-
-```bash
-python -m pip install -r mock-bank-api/requirements-dev.txt -r requirements-dev.txt
-python -m pytest tests -q
-bash -n demo.sh
-```
+`legacy_strict` is the engine's exact-403 assertion. `legacy_lenient` is a benchmark-harness policy that passes `{401,403,404}`; it is not an engine mode. `differential` adds scoped owner/other comparison, canaries, controls, and confirmation. `crapi-order-object` is a **reduced-confidence FAIL** in v2 and v3 because its nonexistent-object control returned 500 and could not separate generic overlap from owner data. See [`docs/BENCHMARK.md`](docs/BENCHMARK.md) for the per-case table, target-mode and ground-truth columns, object-scoped cut, provenance, and determinants.
 
 ## Quick start
 
-### Docker Compose
+Docker image:
 
 ```bash
-docker compose up --build
+docker build -t ledgerprobe:local .
+docker run --rm ledgerprobe:local --version
 ```
 
-- Dashboard: <http://localhost:3001>
-- API docs / Swagger: <http://localhost:8000/docs>
-- Health and active toggles: <http://localhost:8000/health>
-
-Generate a live report, then refresh the dashboard:
-
-```bash
-docker compose --profile scan run --rm fuzzer
-```
-
-The dashboard reads the newest `report-*.json` from `logic-fuzzer/reports`. If the directory is empty, it renders the bundled sample report so the console is never blank.
-
-### One-command demo
-
-```bash
-./demo.sh
-```
-
-Boots the API on `8000`, runs the fuzzer and the simulated mobile harness, then serves the production dashboard on `3001`. Healthy services already listening on those ports are reused instead of duplicated. Override ports with `API_PORT` / `DASHBOARD_PORT`; `Ctrl+C` stops only the processes the script started. Runtime logs land in `.demo/`, and the dashboard picks up the newest report in `logic-fuzzer/reports`.
-
-The script expects the Python and dashboard dependencies below to be installed.
-
-### Local development
+Python install:
 
 ```bash
 python3 -m venv .venv
-source .venv/bin/activate
-pip install -r mock-bank-api/requirements-dev.txt -r logic-fuzzer/requirements.txt
-
-# terminal 1
-cd mock-bank-api
-uvicorn app.asgi:app --host 127.0.0.1 --port 8000
-
-# terminal 2
-cd logic-fuzzer
-python main.py                     # runs bola, mcc, race and writes reports/
-
-# terminal 3
-cd dashboard
-npm install
-REPORTS_DIR=../logic-fuzzer/reports npm run dev
+. .venv/bin/activate
+python -m pip install -e ".[dev]"
 ```
 
-The mobile harness needs no device for a deterministic score:
+Five-minute lab fixture demo. Start the fixture and prepare synthetic credentials:
 
 ```bash
-cd mobile-harness
-python runner.py --simulate --profile vulnerable
-python runner.py --simulate --profile hardened
+docker compose up -d --build --wait mock-bank-api
+curl --fail http://127.0.0.1:8000/health
+.venv/bin/python -m examples.prepare_demo \
+  --base-url http://127.0.0.1:8000 --out .demo/quickstart
 ```
 
----
-
-## Seeded lab accounts
-
-All accounts use password **`demo1234`** (lab only).
-
-| Account | Email | Role | Family | Wallet | Daily cap | Blocked MCCs |
-| --- | --- | --- | --- | --- | --- | --- |
-| Parent A | `parent.a@LedgerProbe.dev` | parent | A | — | — | — |
-| Teen A | `teen.a@LedgerProbe.dev` | teen | A | $120.00 | $50.00 | 7995 (gambling) |
-| Parent B | `parent.b@LedgerProbe.dev` | parent | B | — | — | — |
-| Teen B | `teen.b@LedgerProbe.dev` | teen | B | $500.00 | $200.00 | 7995, 7800 |
-| Merchant | `merchant@LedgerProbe.dev` | merchant | — | — | — | — |
-| Admin | `admin@LedgerProbe.dev` | admin | — | — | — | — |
-
-Known IDs: `usr_parent_a`, `usr_parent_b`, `usr_teen_a`, `usr_teen_b`. The SIM-rebind OTP is `246810`.
-
-`POST /api/v1/dev/reset` restores the seed state. It is unauthenticated by design so each fuzz suite starts from the same baseline; it is controlled by `ALLOW_RESET`.
-
----
-
-## Vulnerability toggles
-
-[`mock-bank-api/config.json`](mock-bank-api/config.json) is read at startup. Override the path with `LedgerProbe_CONFIG` (the compose file mounts it read-only).
-
-| Toggle | Default | Vulnerable behavior when `true` | Fixed behavior when `false` |
-| --- | --- | --- | --- |
-| `ENABLE_BOLA_BUG` | `true` | Allowance reads/writes, device reads, and transaction reads skip the `parent_id` ownership check | Foreign teen IDs return `403` |
-| `ENABLE_RACE_CONDITION` | `true` | Balance and spend checks are separated from their writes by an 80 ms await; concurrent payments use stale values | Each invariant is a conditional `UPDATE` in one transaction |
-| `ENABLE_MCC_POLLUTION_BUG` | `true` | Policy checks `mcc[0]` while the ledger books `mcc[-1]`; unknown MCCs are accepted | List values are rejected; the booked MCC is validated against a registry and policy |
-| `ENABLE_SIM_SWAP_BUG` | `true` | Rebind accepts a new SIM with only the teen's JWT, no OTP | Rebind requires OTP `246810` |
-| `ALLOW_RESET` | `true` | `/api/v1/dev/reset` is available | Reset returns `403` |
-
-Verified contrast using the same fuzzer:
-
-| Configuration | Score | Checks passed | Findings |
-| --- | --- | --- | --- |
-| All four toggles `true` | **34 / 100 (F)** | 3 / 10 | 6 |
-| All four toggles `false` | **100 / 100 (A)** | 10 / 10 | 0 |
-
----
-
-## Trigger a logic bug manually
-
-Start the API, then read Teen B's allowance while authenticated as Parent A:
+Then run the read-only differential policy. The lab is intentionally vulnerable, so the scan exits **1** after reporting a FAIL:
 
 ```bash
-TOKEN=$(curl -s http://127.0.0.1:8000/api/v1/auth/login \
-  -H 'content-type: application/json' \
-  -d '{"email":"parent.a@LedgerProbe.dev","password":"demo1234"}' | jq -r .access_token)
-
-curl -s http://127.0.0.1:8000/api/v1/family/allowance/usr_teen_b \
-  -H "Authorization: Bearer $TOKEN" | jq
+.venv/bin/python ledgerprobe.py \
+  --spec .demo/quickstart/openapi.json \
+  --base-url http://127.0.0.1:8000 \
+  --rules rulesets/abac_isolation.yaml \
+  --inputs .demo/quickstart/inputs.json \
+  --read-only --max-rps 5 \
+  --sarif .demo/quickstart/results.sarif \
+  --junit .demo/quickstart/results.xml
 ```
 
-With `ENABLE_BOLA_BUG=true` the response is `200` and contains another household's policy:
-
-```json
-{
-  "teen_id": "usr_teen_b",
-  "parent_id": "usr_parent_b",
-  "daily_limit_cents": 20000,
-  "blocked_mccs": ["7995", "7800"],
-  "spent_today_cents": 0
-}
-```
-
-Set the toggle to `false`, restart the API, and the same call returns `403 teen is not in your family`.
-
-Run the whole harness:
-
-```bash
-cd logic-fuzzer
-python main.py --base-url http://127.0.0.1:8000
-```
-
-Example output from the vulnerable configuration:
+Real output from this workspace:
 
 ```text
-[*] running bola suite against http://127.0.0.1:8000
-[*] running mcc suite against http://127.0.0.1:8000
-[*] running race suite against http://127.0.0.1:8000
-
-[+] FSR-20261028-183812  score 34/100 (grade F)
-    3/10 checks passed
-    FS-001  HIGH     CVSS 8.1  Concurrent payments bypass daily limit and lose balance updates
-    FS-002  HIGH     CVSS 7.1  Cross-tenant allowance takeover (BOLA write)
-    FS-003  HIGH     CVSS 7.1  Merchant category block bypass via MCC array smuggling
-    FS-004  MEDIUM   CVSS 6.5  Cross-tenant allowance disclosure (BOLA)
-    FS-005  MEDIUM   CVSS 6.5  Cross-tenant SIM-binding disclosure
-    FS-006  MEDIUM   CVSS 6.5  Cross-tenant transaction history disclosure
-[+] report written to .../logic-fuzzer/reports/report-FSR-20261028-183812.json
+[*] 11 endpoints; 0 dependency candidates
+[failed] bola-cross-tenant-access GET /api/v1/family/allowance/{teen_id}: Forbidden response reproducibly exposed owner-object evidence.
+[+] SARIF: .demo/quickstart/results.sarif; {'failed': 1}
+[!] legacy_static_credentials: inputs.json static contexts are deprecated
 ```
 
-### The race, in numbers
+Stop the fixture with `docker compose down`.
 
-The race suite resets the lab, then fires 12 simultaneous payments of $30.00 against Teen A's $50.00 daily cap and $120.00 balance. The safe maximum is one approval.
+## How a verdict is reached
 
-```json
-{
-  "attempts": 12,
-  "amount_cents": 3000,
-  "daily_limit_cents": 5000,
-  "status_counts": { "200": 12 },
-  "approved": 12,
-  "safe_max_approved": 1,
-  "approved_total_cents": 36000,
-  "starting_balance_cents": 12000,
-  "ending_balance_cents": 9000,
-  "ledger_delta_cents": 3000,
-  "balance_consistent": false,
-  "transactions_recorded": 12
-}
+```text
+owner baseline request
+  |-- not 2xx / missing identity ---------------------> ERROR or SKIPPED
+  v
+forbidden request
+  |-- 401 / 403 / 404 (accepted denial) --------------> PASS
+  |-- 2xx
+        |-- negative control (nonexistent object) ----+
+        |-- unauthenticated control -----------------+
+        |-- owner canaries / unique-value overlap ----+
+        |-- confirmation repeats (default 2) ---------+
+        v
+   reproducible owner-specific evidence + usable control -> FAIL
+   generic 2xx / empty / HTML / unstable / control invalid -> INCONCLUSIVE
 ```
 
-All 12 payments were approved, the wallet only moved by one payment, and 12 ledger rows disagree with the balance. That is the lost-update + limit-bypass pair in one run.
+Reason codes include `leak_detected`, `unauthenticated_leak`, `state_changed_by_other`, `no_effect`, `ambiguous_2xx`, `invalid_control`, `control_unusable`, `weak_synchronization`, `rate_limited`, `timeout`, `server_error`, `not_reproducible`, and `restore_failed`. A FAIL is a policy failure; INCONCLUSIVE is not treated as a pass and normally exits 0 unless `--fail-on-inconclusive` is set.
 
-### MCC smuggling
+## Check types
 
-Teen A is blocked from MCC `7995` (gambling). A direct payment using `"mcc": "7995"` is rejected with `403`. This payload is approved because the policy checks the first element and books the last:
+| Check | Status |
+| --- | --- |
+| BOLA / IDOR | Benchmarked on VAmPI and crAPI. |
+| State-changing BOLA | Benchmarked on VAmPI (owner-login probe and restore). |
+| Race conditions | Fixtures only; no live VAmPI/crAPI race benchmark. |
+| BFLA | Fixtures only; not yet benchmarked on real targets. |
+| Mass assignment | **Experimental, untested**; requires `--experimental`. |
+| Business limits | **Experimental, untested**; requires `--experimental`. |
 
-```json
-{ "amount_cents": 100, "mcc": ["5411", "7995"], "merchant": "Loop Hole" }
+Race synchronization supports `burst`, HTTP/1.1 `last_byte`, and an optional `h2_single_packet` mode that is **not tested** because `h2` is not installed here. See [`docs/RACE.md`](docs/RACE.md) for the N=50 fixture study and honest detection rates. BFLA and the experimental checks are documented in [`docs/CHECKS_NEW.md`](docs/CHECKS_NEW.md).
+
+## Integrations
+
+| Integration | How it was tested |
+| --- | --- |
+| SARIF 2.1.0 | Reporter tests, including fingerprints, rule metadata, and official-schema validation when the schema is available. |
+| JUnit XML | Reporter tests for PASS, FAIL, INCONCLUSIVE, ERROR, suppressions, and XML escaping. |
+| DefectDojo export | JSON exporter is schema-tested. **Upload is not implemented.** |
+| Jira / Linear | `MockTransport` tests cover request shapes, plan/apply, deduplication, retries, cooldowns, and flood caps. No live tenant is tested. |
+| Slack | Mocked digest test; one metadata-only message per apply run. No live workspace is tested. |
+| GitHub Action | Composite action and workflow YAML are parsed and tested. No marketplace/live-run test is documented. |
+| Docker image | Built and smoke-tested locally with `--version`, `diff`, and `drift`. |
+
+See [`docs/INTEGRATIONS.md`](docs/INTEGRATIONS.md) for configuration and [`docs/OPERATIONS.md`](docs/OPERATIONS.md) for operational controls.
+
+## Safety model
+
+- **Mutation gates:** mutating rules require `mutating: true`, `--allow-mutations`, a loopback or explicitly allowed host, no `--read-only`, and a `restore:` block.
+- **Host allowlist:** target and identity hosts are checked before HTTP; redirects and automatic retries are disabled.
+- **Environment gating:** production read-only requires an explicit flag; production mutation/race is hard-blocked.
+- **Kill switch:** `--kill-file` stops before the next request, runs pending restores, skips remaining rules, writes reports, and exits 4.
+- **Identification:** every request carries `User-Agent: LedgerProbe/<version>` and `X-LedgerProbe-Run: <run_id>`.
+- **Secrets:** resolved tokens stay in process memory; reports and logs retain allowlisted evidence only, never credential values.
+
+## Limitations
+
+- INCONCLUSIVE means the evidence did not support PASS or FAIL. It is not a clean result.
+- The benchmark is 23 cases across 18 endpoints, same-author, source-derived, and has no confidence intervals.
+- Race results are local fixture measurements; a PASS only means no violation was observed in the tested rounds.
+- Scope declarations (`object`, `caller`, `shared`) are supplied by the rule author and are not independently verified.
+- Host allowlisting and mutation gates are not a network sandbox; scan only systems you are authorized to test.
+- `h2_single_packet` remains experimental and untested against a real HTTP/2 server.
+
+## Repository layout, development, test commands, and license
+
+```text
+ledgerprobe.py       CLI entry point
+pkg/                 parser, rules, verdicts, guardrails, reporters, integrations
+rulesets/            reviewed example policies
+examples/            synthetic lab setup and auth input template
+tests/               engine, fixture, corpus, and end-to-end tests
+benchmark/           frozen ground truth, benchmark harness, race study
+mock-bank-api/       local FastAPI/SQLite test fixture
+dashboard/           Next.js report and benchmark console
 ```
-
-Response (truncated):
-
-```json
-{ "payment_id": 14, "status": "approved", "mcc": "7995", "amount_cents": 100 }
-```
-
-### SIM rebind without possession proof
 
 ```bash
-curl -s -X POST http://127.0.0.1:8000/api/v1/device/bind \
-  -H "content-type: application/json" \
-  -H "Authorization: Bearer $TEEN_TOKEN" \
-  -d '{"sim_serial":"89014103211118599999","attestation":{"provider":"software","strongbox":false,"key_attested":false}}' | jq
+python -m pip install -e ".[dev]"
+python -m pytest tests -q
+python -m pytest benchmark/tests -q
+python tests/corpus_metrics.py
 ```
 
-With `ENABLE_SIM_SWAP_BUG=true` the rebind succeeds without the OTP and records `"strongbox": false`.
-
----
-
-## Findings, CVSS, and OWASP mapping
-
-| Check ID | Finding | Endpoint | CVSS 3.1 | OWASP API Top 10 | CWE |
-| --- | --- | --- | --- | --- | --- |
-| `BOLA-ALLOWANCE-WRITE` | Cross-tenant allowance takeover | `POST /api/v1/family/allowance` | 7.1 | API1:2023 BOLA | CWE-639 |
-| `BOLA-ALLOWANCE-READ` | Cross-tenant allowance disclosure | `GET /api/v1/family/allowance/{teen_id}` | 6.5 | API1:2023 BOLA | CWE-639 |
-| `BOLA-DEVICE-READ` | Cross-tenant SIM-binding disclosure | `GET /api/v1/device/{teen_id}` | 6.5 | API1:2023 BOLA | CWE-639 |
-| `BOLA-TRANSACTIONS-READ` | Cross-tenant transaction history | `GET /api/v1/wallet/transactions/{teen_id}` | 6.5 | API1:2023 BOLA | CWE-639 |
-| `MCC-ARRAY-BYPASS` | MCC array smuggling | `POST /api/v1/wallet/pay` | 7.1 | API6:2023 Sensitive flows | CWE-863 |
-| `MCC-NOT-ENFORCED` | Policy block accepted payment | `POST /api/v1/wallet/pay` | 7.1 | API6:2023 Sensitive flows | CWE-863 |
-| `RACE-LIMIT-BYPASS` | Concurrent limit bypass + lost update | `POST /api/v1/wallet/pay` | 8.1 | API6:2023 Sensitive flows | CWE-362 |
-
-CVSS vectors are stored in every finding. The security score is `100 − Σ severity weight`, floored at zero: critical 25, high 15, medium 7, low 3. Grades: A ≥ 90, B ≥ 80, C ≥ 70, D ≥ 60, E ≥ 40, otherwise F.
-
-Each finding carries:
-
-- captured request and response (authorization redacted),
-- the exact endpoint and check id,
-- a remediation summary plus vulnerable/secure code snippets,
-- OWASP category, CWE, CVSS score and vector.
-
-### Report schema
-
-```json
-{
-  "schema_version": "1.0",
-  "run": { "id": "FSR-…", "target": "http://…", "score": 34, "grade": "F", "checks_total": 10, "checks_passed": 3 },
-  "summary": { "findings": 6, "by_severity": { "critical": 0, "high": 3, "medium": 3, "low": 0 }, "by_owasp": [], "endpoints": [] },
-  "findings": [ { "id": "FS-001", "check_id": "RACE-LIMIT-BYPASS", "cvss": {}, "owasp": {}, "evidence": {}, "remediation": {} } ],
-  "graph": { "nodes": [], "edges": [] },
-  "checks": [ { "name": "race.daily_limit", "passed": false, "detail": "12 of 12 payments approved; limit allowed 1" } ]
-}
-```
-
----
-
-## Mobile attestation harness
-
-The harness observes runtime telemetry from a mock banking APK (not bundled) or scores a deterministic profile. It answers one question: **does the app bind the SIM to hardware, or to a value an attacker can rewrite?**
-
-```bash
-cd mobile-harness
-python runner.py --simulate --profile vulnerable
-# MSH-…  resilience 10/100 (weak, grade F)
-#   MSH-001  MEDIUM  Key material is not isolated in StrongBox/TEE
-#   MSH-002  HIGH    Device attestation is trusted without server verification
-#   MSH-003  HIGH    SIM binding relies on spoofable telephony identifiers
-#   MSH-004  MEDIUM  No effective tamper or root detection
-
-python runner.py --simulate --profile hardened
-# MSH-…  resilience 100/100 (strong, grade A)
-```
-
-Device mode requires `adb` and the optional Frida dependency:
-
-```bash
-pip install -r requirements.txt
-python runner.py --serial emulator-5554 --package com.LedgerProbe.mockbank
-```
-
-[`scripts/sim_hook.js`](mobile-harness/scripts/sim_hook.js) hooks:
-
-- `TelephonyManager.getSimSerialNumber`, `getSubscriberId`, `getDeviceId`
-- `KeyGenParameterSpec$Builder.setIsStrongBoxBacked` and `setUserAuthenticationRequired`
-- `KeyStore.getInstance`
-- `Runtime.exec` (root checks)
-- `SmsManager.sendTextMessage` (forwarding indicators)
-- Build tags, manufacturer, model, fingerprint
-
-Scoring uses only observed controls and excludes unknowns rather than assuming they pass. In device mode, server-side attestation verification and root-detection *enforcement* cannot be proven from client hooks, so those controls are reported as `NOT_OBSERVED`; the report labels its score `inferred`.
-
----
-
-## Dashboard
-
-- **Overview** — score gauge, severity mix, OWASP distribution (Recharts), endpoint risk, findings, run history, and failed control details.
-- **Finding detail** — captured HTTP traffic, CVSS/OWASP/CWE metadata, race-burst numbers, and the vulnerable/secure patch pair.
-- **Permission graph** — an interactive SVG of principals, teens, and protected resources. Red edges crossed a family boundary; clicking one opens its finding.
-
-Reports are loaded server-side from `REPORTS_DIR` (default `../logic-fuzzer/reports`). The page is dynamic, so a newly generated report appears on refresh. If no live report exists, the console uses [`dashboard/data/sample-report.json`](dashboard/data/sample-report.json), which was generated by an actual fuzzer run.
-
----
-
-## CI
-
-[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on pushes and pull requests to `main`:
-
-- API tests against both toggle states
-- mobile scoring tests
-- Docker Compose configuration validation
-- a live fuzzer scan that asserts the BOLA, MCC, and race findings are still detected
-- the dashboard production build
-
-## Verification
-
-```bash
-# API behavior, both toggle states
-cd mock-bank-api && ../.venv/bin/python -m pytest -q       # 7 passed
-
-# Mobile scoring profiles and unknown-control handling
-cd mobile-harness && ../.venv/bin/python -m pytest -q      # 3 passed
-
-# Fuzzer end-to-end, vulnerable target
-cd logic-fuzzer && ../.venv/bin/python main.py             # 6 findings, score 34
-
-# Dashboard
-cd dashboard && npm run typecheck && npm run build
-```
-
-To verify the fixed configuration, set all four toggles to `false`, restart the API, and rerun the fuzzer. The harness should report `100/100` and zero findings; this is what the API test suite asserts for each toggle.
-
----
-
-## Safety and limitations
-
-- **Not production software.** The API contains intentional authorization and concurrency bugs. Run it on loopback or an isolated lab network only. `config.json` contains a known dev JWT secret.
-- **Race technique.** The fuzzer uses a synchronized asyncio burst over HTTP/1.1, not a true HTTP/2 single-packet last-byte attack. The mock's 80 ms check/write gap makes the lost update deterministic; a real target may need last-byte synchronization.
-- **Mobile device mode.** No APK is included. Device mode attaches to an already-running package and infers the surface from Frida telemetry; it cannot see backend attestation decisions. The simulated profiles are deterministic and intended for scoring/pipeline testing.
-- **No persistence hardening.** SQLite and the reset endpoint are lab conveniences. There is no rate limiting, no TLS, and no secret management.
-- **Dashboard sample fallback** is clearly labelled when no live report is present.
-
-## License / use
-
-Use only against systems you own or are explicitly authorized to test. The included mock bank exists so that every finding is reproducible without touching a real financial institution.
+The corpus gate must remain at zero false positives and zero false negatives. `ledgerprobe --version` reports `1.1.0`. Licensed under the [MIT License](LICENSE).

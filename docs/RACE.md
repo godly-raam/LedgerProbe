@@ -118,7 +118,8 @@ tests at anything except that local fixture.
 | Profile | Expected | Actual |
 | --- | --- | --- |
 | `wallet_race_vulnerable` | FAIL `race_invariant_violated` | FAIL `race_invariant_violated` |
-| `wallet_race_vulnerable_narrow` | FAIL `race_invariant_violated` | FAIL `race_invariant_violated` |
+| `wallet_race_vulnerable_narrow_deterministic` | FAIL `race_invariant_violated` | FAIL `race_invariant_violated` |
+| `wallet_race_vulnerable_narrow_yield` | not asserted in pytest | excluded from pytest/corpus; yield-only timing study below |
 | `wallet_race_safe` | PASS `no_violation_observed` | PASS `no_violation_observed` |
 | `coupon_single_use_vulnerable` | FAIL `race_invariant_violated` | FAIL `race_invariant_violated` |
 | `coupon_single_use_safe` | PASS `no_violation_observed` | PASS `no_violation_observed` |
@@ -135,38 +136,34 @@ do not contain object IDs, market/account values, tokens, idempotency keys, or
 request/response bodies. `tests/test_race.py` scans every generated SARIF/JUnit
 report for the fixture's balance value and identity tokens.
 
+<!-- race-study:start -->
 ## Detection study
 
-Twenty fresh runs per mode against each wallet fixture, with 10 requests and 5
-rounds per run (on the local loopback fixture). Every `wide` row below used
-`wallet_race_vulnerable` (a 30 ms check/write gap); every `narrow` row used the
-yield-only `wallet_race_vulnerable_narrow` (`await asyncio.sleep(0)`, with no
-barrier). The separate `wallet_race_vulnerable_narrow_deterministic` profile is
-for CI determinism only and was not used for this study:
+N=50 fresh runs per fixture/mode. Each run used 10 requests and 5 rounds.
+The wide fixture (`wallet_race_vulnerable`) has a 30 ms check/write gap.
+The narrow fixture (`wallet_race_vulnerable_narrow_yield`) has only
+`await asyncio.sleep(0)` between the check and the write; it is
+timing-dependent and is excluded from pytest and the corpus gate. CI uses
+`wallet_race_vulnerable_narrow_deterministic` instead.
 
-| Fixture | Mode | FAIL runs | FAIL rate | Median spread (ms) | Rounds to first hit |
-| --- | --- | ---: | ---: | ---: | --- |
-| wide (30 ms) | `burst` | 20/20 | 100% | 2.335522 | 1 |
-| wide (30 ms) | `last_byte` | 20/20 | 100% | 0.071160 | 1 |
-| narrow (yield-only) | `burst` | 0/20 | 0% | 2.359189 | none |
-| narrow (yield-only) | `last_byte` | 20/20 | 100% | 0.067570 | 1 |
-| n/a | `h2_single_packet` | not tested (h2 unavailable) | n/a | n/a | n/a |
+| Fixture | Mode | Runs | FAIL count | FAIL rate | Wilson 95% CI | Median release spread (ms) |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| `wallet_race_vulnerable` (wide (30 ms gap)) | `burst` | 50 | 50 | 100.0% | 92.9%–100.0% | 2.237580 |
+| `wallet_race_vulnerable` (wide (30 ms gap)) | `last_byte` | 50 | 50 | 100.0% | 92.9%–100.0% | 0.152838 |
+| `wallet_race_vulnerable_narrow_yield` (narrow (yield-only)) | `burst` | 50 | 2 | 4.0% | 1.1%–13.5% | 2.350920 |
+| `wallet_race_vulnerable_narrow_yield` (narrow (yield-only)) | `last_byte` | 50 | 48 | 96.0% | 86.5%–98.9% | 0.174859 |
 
-The h2 row is **not an h2 measurement**. The optional `h2` package was not
-installed, so no h2 runs were performed; the table intentionally does not repeat
-last-byte numbers as though they were h2 numbers. Hypercorn was not installed,
-so no real HTTP/2 fixture was attempted. The mode remains experimental and
-unverified against a real HTTP/2 server.
+`last_byte` on the yield-only narrow fixture detected 48/50 runs (96.0%), **below 100%**.
 
-The honest result changes with the window. On the wide fixture, `burst` and
-`last_byte` both detected the bug 20/20; `last_byte` reduced median release
-spread from 2.34 ms to 0.07 ms, but the 30 ms gap gave burst enough time to
-win anyway. On the yield-only narrow fixture, `burst` detected **0/20** while
-`last_byte` detected **20/20**, with first hits in rounds 1-5. Burst still does
-not detect the yield-only narrow-window fixture. Release spread alone is not a
-detection guarantee, but this is the evidence that the synchronized mode is
-needed for a small check/write window. These are local fixture results, not a
-general detection-rate estimate.
+The interval is a Wilson score interval for the observed FAIL count.
+Median release spread is the median of each run's evidence field; it is
+not a detection-rate estimate.
+
+| Mode | Status |
+| --- | --- |
+| `h2_single_packet` | **not tested** — optional `h2` package is not installed; no h2 measurement was performed. |
+
+<!-- race-study:end -->
 
 ## Safe use
 
