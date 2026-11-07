@@ -20,7 +20,7 @@ jobs:
 
     steps:
       - name: Check out full history for gitleaks
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -49,7 +49,7 @@ jobs:
 
       - name: Upload gitleaks SARIF
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: gitleaks-sarif
           path: gitleaks.sarif
@@ -62,10 +62,10 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: pip
@@ -77,7 +77,7 @@ jobs:
             requirements-dev.txt
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: npm
@@ -173,7 +173,7 @@ jobs:
 
       - name: Upload engine reports
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ledgerprobe-reports
           path: |
@@ -195,10 +195,10 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: pip
@@ -219,7 +219,7 @@ jobs:
         run: python tests/corpus_metrics.py --output corpus_metrics.md
 
       - name: Upload corpus metrics artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: corpus-metrics
           path: corpus_metrics.md
@@ -230,7 +230,7 @@ jobs:
     timeout-minutes: 25
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4  # TODO: pin SHA
+        uses: actions/checkout@v7  # TODO: pin SHA
 
       - name: Build image
         run: docker build -t ledgerprobe:ci .
