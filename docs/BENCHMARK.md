@@ -47,13 +47,12 @@ ERROR. A failed restore is `ERROR restore_failed` and a non-zero exit. Mutation
 attempts are capped at one per rule, and a rule without a `verify:` block is
 `INCONCLUSIVE unverified_mutation` after a 2xx response.
 
-The VAmPI legacy rows in this document are **v2 records**, not v3 re-runs. The
-legacy PUT rule predates the `mutating` contract and would need migration before
-a full legacy replay. The VAmPI differential set includes the documented password-change mutation.
+The VAmPI legacy rows in this document were recorded at v1, not re-run for v2 or
+v3. The legacy PUT rule predates the `mutating` contract and would need migration
+before a full legacy replay. The VAmPI differential set includes the documented password-change mutation.
 crAPI rules are read-only and the benchmark runs the engine with `--read-only`.
-The legacy VAmPI status baseline is a historical v2 record and is not re-run in
-v3; its PUT rule predates the `mutating` contract and would need migration before
-a full legacy replay.
+The legacy VAmPI status baseline is a historical v1 record; its PUT rule predates
+the `mutating` contract and would need migration before a full legacy replay.
 
 The separate **56-profile fixture corpus** is also 100%, but those fixtures and
 the engine were written by the same author. It is a regression guard for known
@@ -155,8 +154,8 @@ restored in a `finally` path.
 
 ## Results
 
-The v3 row is the re-run differential. The legacy rows are the recorded v2
-results; v3 did not re-run them.
+The v3 row is the re-run differential. The legacy rows are the recorded v1
+results; v2 and v3 did not re-run them.
 
 | Target | Mode | N | TP | FP | TN | FN | INC_vuln | INC_safe | Precision | Recall | Recall excl. INC |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -167,9 +166,10 @@ results; v3 did not re-run them.
 | crAPI | legacy_lenient | 10 | 5 | 4 | 1 | 0 | 0 | 0 | 55.6% | 100.0% | 100.0% |
 | crAPI | differential | 10 | 5 | 0 | 4 | 0 | 0 | 1 | 100.0% | 100.0% | 100.0% |
 
-`benchmark/RESULTS.md` is the generated per-case report. The VAmPI differential
-v3 row was identical across three fresh-reset runs; there were zero verdict
-flips. The other five rows are the v2 records and were not re-run for v3.
+`benchmark/RESULTS.md` is the generated per-case report.
+
+Re-verified on 2026-11-07 at commit c9b347f, 3 fresh-reset runs, identical verdicts.
+The VAmPI differential v3 row was identical across three fresh-reset runs; there were zero verdict flips. The crAPI differential row was likewise identical. The VAmPI legacy rows and crAPI legacy rows remain the v1 records: VAmPI legacy predates the `mutating` contract, and crAPI legacy scans could not produce valid rows because the current target returned no 2xx baseline for the deprecated static-context inputs.
 
 The overall differential inconclusive rate fell from **9/23 (39.1%)** in v1 to
 **3/23 (13.0%)** in v2 and **1/23 (4.3%)** in v3. The remaining abstention is
@@ -348,9 +348,12 @@ was not rerun for v3 because the engine changes do not alter target content.
 
 ## What could not run
 
-- The v3 VAmPI differential mode and all crAPI modes ran. VAmPI legacy modes
-  were not re-run for v3; their rows are the recorded v2 results because the
-  legacy rule file predates the `mutating` contract.
+- The v3 VAmPI differential mode and crAPI differential mode ran. VAmPI legacy
+  modes were not re-run for v2/v3; their rows are the recorded v1 results because
+  the legacy rule file predates the `mutating` contract.
+- The crAPI legacy replay was attempted but could not produce valid rows: every
+  legacy rule errored because the current target returned no 2xx baseline for the
+  deprecated static-context inputs. Those rows remain the v1 records.
 - `crapi-vehicles` could not produce a caller-scoped PASS because the other test
   identity has no vehicle, so its successful response is an empty list.
 - A ZAP active scan and an authenticated ZAP scan were not run. The safe
@@ -374,7 +377,7 @@ Compose project. Add `--keep` to inspect the stack after the final run.
 
 A full legacy replay would additionally require migrating
 `benchmark/targets/vampi/rules_legacy.yaml` to the `mutating` contract; the
-recorded legacy rows above are the v2 baseline. The pre-change results remain at
+recorded legacy rows above are the v1 baseline. The pre-change results remain at
 `benchmark/results_v1.md`.
 
 Run the guard/scorer tests with:

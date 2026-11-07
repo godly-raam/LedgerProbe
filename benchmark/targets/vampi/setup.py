@@ -68,9 +68,21 @@ def main() -> int:
     wait_ready(base)
     # /createdb is the upstream reset/populate route. Each instance owns its
     # own SQLite database, so resetting here cannot affect the other mode.
-    status, body = call(base, "GET", "/createdb")
+    # Upstream VAmPI picks random seed-book titles; a collision returns 500
+    # without clearing the database. Retry the non-destructive-to-setup call.
+    reset_error = None
+    for _attempt in range(5):
+        status, body = call(base, "GET", "/createdb")
+        if status == 200:
+            break
+        reset_error = f"{status} {body}"
+        if status != 500:
+            break
+        time.sleep(1)
+    else:
+        status = 500
     if status != 200:
-        raise SystemExit(f"createdb failed: {status} {body}")
+        raise SystemExit(f"createdb failed after retries: {reset_error}")
 
     suffix = secrets.token_hex(5)
     owner = f"lp_owner_{suffix}"

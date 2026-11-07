@@ -1,6 +1,6 @@
 # LedgerProbe real-world benchmark results
 
-Generated: 2026-11-02T19:36:45+00:00
+Generated: 2026-11-07T20:59:55+00:00
 
 Targets were run locally on loopback only. Labels come from `benchmark/ground_truth/`, frozen before any scan. Each mode was run three times with a fresh target reset between runs.
 

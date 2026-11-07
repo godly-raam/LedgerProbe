@@ -394,7 +394,7 @@ def run_scan(target: Target, instance: str, mode: str, base_url: str,
         "--spec", str(target.spec), "--base-url", base_url,
         "--rules", str(rules), "--inputs", str(inputs),
         "--sarif", str(sarif), "--junit", str(junit),
-        "--max-rps", "20", "--timeout", "10",
+        "--max-rps", "20", "--timeout", "10", "--environment", "staging",
     ]
     if auth.exists():
         command += ["--auth", str(auth)]
