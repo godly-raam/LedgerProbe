@@ -33,6 +33,7 @@ RUN chown ledgerprobe:ledgerprobe /work
 RUN apt-get update && apt-get install -y --no-install-recommends --only-upgrade apt libapt-pkg7.0 \
     && rm -rf /var/lib/apt/lists/*
 
+RUN apt-get update && apt-get upgrade -y --no-install-recommends && rm -rf /var/lib/apt/lists/*
 USER ledgerprobe
 
 ENTRYPOINT ["ledgerprobe"]
