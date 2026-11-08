@@ -5,3 +5,5 @@
 e9bdca3d78687655897bee3a5904b0fdd091e30a:benchmark/targets/vampi/openapi.json:jwt:280
 # Historical synthetic API key in an auth fixture test.
 0e7cb11648550853e0ed9af3c9f0788cb5d3b749:tests/test_auth.py:generic-api-key:372
+# Current-tree fingerprint for the same synthetic Vault fixture after line drift.
+tests/test_auth.py:generic-api-key:391
