@@ -3,6 +3,18 @@
 All notable changes to LedgerProbe are documented here. This project follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and semantic versioning.
 
+Version numbers are maintained in `pkg/version.py` and bumped when the
+maintainer chooses; no Git tags are required.
+
+## [Unreleased]
+
+### Changed
+
+- Installation documentation now uses pipx or a local virtual environment from
+  GitHub, with Docker built locally from a clone.
+- The runtime JSON schemas are installed as package data so the CLI works
+  outside the repository.
+
 ## [1.1.0] - 2026-11-07
 
 ### Added

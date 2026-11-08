@@ -65,13 +65,13 @@ race conditions. See `docs/RACE.md` for the race design and detection study.
 | Target | Upstream revision | Runtime | Modes |
 | --- | --- | --- | --- |
 | VAmPI | `erev0s/VAmPI@f16052dce83f05847133ec98f01c5193a41de7d8` | `erev0s/vampi@sha256:0a5a224b6e14ae7da6a6ea265178ff71286ff903aec74adee98f660bb0e4ca12` | `vulnerable=1`, `vulnerable=0` |
-| crAPI | OWASP/crAPI `v1.1.6` source snapshot (`benchmark/.out/crapi-source`; its `VERSION` file is stale) | eight release images pinned by digest in `targets/crapi/compose.yaml`, including `crapi-identity` `1.1.6` | single deployment |
+| crAPI | OWASP/crAPI `v1.1.6` source snapshot (`benchmark/.out/crapi-source`; its `VERSION` file is stale) | eight target images pinned by digest in `targets/crapi/compose.yaml`, including `crapi-identity` `1.1.6` | single deployment |
 
 The recorded v2 run used Docker Engine `28.5.2+dfsg4` and Compose `2.40.3-3`.
 The v3 VAmPI differential re-run used the same pinned image and stack. VAmPI's
-only published tag is mutable, so its manifest digest is pinned. crAPI publishes
-a `1.1.6` tag only for `crapi-identity`; the other components only have
-release-day `latest` images, which are pinned by digest rather than retagged.
+image reference is mutable, so its manifest digest is pinned. crAPI identifies
+only `crapi-identity` as `1.1.6`; the other components have `latest` images,
+which are pinned by digest rather than retagged.
 
 ## Ground truth provenance
 
@@ -99,7 +99,7 @@ The final v3 run was checked with:
 git diff bench-v1..HEAD -- benchmark/ground_truth
 ```
 
-The command was empty. `bench-v1` is tag `78ef225`; the pre-change results are
+The command was empty. `bench-v1` is commit `78ef225`; the pre-change results are
 also copied to `benchmark/results_v1.md`.
 
 ## Method
@@ -290,7 +290,7 @@ caller-scope contract deliberately treats an empty successful response as
 ## ZAP relevance
 
 OWASP ZAP
-`ghcr.io/zaproxy/zaproxy@sha256:030d3df57735dacbb83464854758e674dd9ad01d79d12a129a8e58b1fd384238`
+`sha256:030d3df57735dacbb83464854758e674dd9ad01d79d12a129a8e58b1fd384238`
 was available and a **safe API baseline** (`-S`) was run against the crAPI
 OpenAPI snapshot in the v1 workspace. It completed with **0 FAIL, 8 WARN-NEW and
 114 PASS** over 44 imported endpoints. The warnings were missing security
