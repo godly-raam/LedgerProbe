@@ -176,6 +176,15 @@ schema/syntax error prevented a verdict, so the allowed post-run syntax/schema
 fix was not used. The two FP rules and the VAmPI snapshot rule were left exactly
 as authored; changing them would be post-run tuning.
 
+## Amendment 1 (engine changes after the first run; results re-run separately)
+
+Post-first-run engine tuning is documented in
+[`benchmark/AMENDMENT_1.md`](../benchmark/AMENDMENT_1.md). It covers request-body
+`$ref`/composition resolution, form login, caller/shared canary requirements,
+enum-aware mass-assignment injection, empty-rules handling, and the JUnit
+verdict property. The first-run numbers and case results above are unchanged;
+any post-amendment results are reported separately as "after tuning."
+
 ## Findings (not fixed)
 
 | Finding | Evidence | Scope |
