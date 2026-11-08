@@ -122,6 +122,7 @@ def _scoped_result(scope: str, *, baseline: dict, forbidden: dict, acceptable_st
             "timeout": "Authorization evidence timed out.",
             "not_reproducible": "Leak evidence could not be reproduced on every confirmation.",
             "leak_detected": "Forbidden response reproducibly exposed owner-object evidence.",
+            "overlap_without_canary": "Forbidden response shared generic values but no owner canary.",
             "ambiguous_2xx": "Successful response is empty or unparseable.",
             "unexpected_status": "Forbidden response returned an unexpected status.",
             "caller_scoped": "Successful response is scoped to the requesting identity with no owner evidence.",
@@ -172,13 +173,14 @@ def _scoped_result(scope: str, *, baseline: dict, forbidden: dict, acceptable_st
         body = forbidden.get("body")
         if body is None or not _leaves(body, ignored):
             return result("inconclusive", "ambiguous_2xx")
-        candidate = bool(hits) or len(overlap) >= min_unique_leaf_values
-        if not candidate:
+        if not hits and overlap:
+            return result("inconclusive", "overlap_without_canary")
+        if not hits:
             return result("passed", note="caller_scoped")
-        failure = confirmed(hits or overlap, allow_subset=False)
+        failure = confirmed(hits, allow_subset=False)
         if failure:
             return result("inconclusive", failure)
-        evidence.update(overlap_count=len(overlap), canary_matched=bool(hits),
+        evidence.update(overlap_count=len(overlap), canary_matched=True,
                         confirm_runs=len(confirmations))
         return result("failed", "leak_detected")
 

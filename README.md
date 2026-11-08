@@ -114,7 +114,14 @@ forbidden request
    generic 2xx / empty / HTML / unstable / control invalid -> INCONCLUSIVE
 ```
 
-Reason codes include `leak_detected`, `unauthenticated_leak`, `state_changed_by_other`, `no_effect`, `ambiguous_2xx`, `invalid_control`, `control_unusable`, `weak_synchronization`, `rate_limited`, `timeout`, `server_error`, `not_reproducible`, and `restore_failed`. A FAIL is a policy failure; INCONCLUSIVE is not treated as a pass and normally exits 0 unless `--fail-on-inconclusive` is set.
+Reason codes include `leak_detected`, `unauthenticated_leak`, `state_changed_by_other`, `no_effect`, `overlap_without_canary`, `ambiguous_2xx`, `invalid_control`, `control_unusable`, `weak_synchronization`, `rate_limited`, `timeout`, `server_error`, `not_reproducible`, and `restore_failed`. A FAIL is a policy failure; INCONCLUSIVE is not treated as a pass and normally exits 0 unless `--fail-on-inconclusive` is set.
+
+Caller and shared scopes require declared non-empty `leak_detection.canaries`. FAIL requires an owner canary in the other identity's response; unique-value overlap alone is `INCONCLUSIVE` with `overlap_without_canary`.
+
+| Scope | FAIL | PASS | INCONCLUSIVE |
+| --- | --- | --- | --- |
+| `caller` | owner canary appears in the other identity's response | no owner canary and no unique-value overlap | generic overlap without an owner canary (`overlap_without_canary`) |
+| `shared` | owner canary appears in the other identity's response | no owner canary in the owner baseline | owner canary is declared but absent from the response (`ambiguous_2xx`) |
 
 ## Check types
 

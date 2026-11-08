@@ -7,7 +7,7 @@ _REASONS = {"unauthenticated_leak", "leak_detected", "assertion_failed", "baseli
             "safety_blocked", "endpoint_absent", "invalid_control", "control_unusable",
             "mutation_blocked", "state_changed_by_other", "unverified_mutation",
             "verify_unavailable", "restore_failed", "race_invariant_violated",
-            "weak_synchronization", "reset_failed"}
+            "weak_synchronization", "reset_failed", "overlap_without_canary"}
 
 
 def result_properties(result):

@@ -48,7 +48,12 @@ def write_junit(results, path, *, warnings=()) -> Path:
                 message = f"{message}: {result['reason']}" if message else result["reason"]
             message = _text(message)
             ET.SubElement(case, tag, {"message": message}).text = message
-        properties = {"fingerprint": result_fingerprint(result), **result_properties(result)}
+        verdict = result.get("verdict") or {
+            "failed": "FAIL", "suppressed": "FAIL", "passed": "PASS",
+            "inconclusive": "INCONCLUSIVE", "skipped": "SKIPPED", "error": "ERROR",
+        }.get(result["status"], "INCONCLUSIVE")
+        properties = {"fingerprint": result_fingerprint(result), "verdict": verdict,
+                      **result_properties(result)}
         if properties:
             node = ET.SubElement(case, "properties")
             for name, value in properties.items():

@@ -238,8 +238,13 @@ def test_caller_scope_cross_contamination_fails():
     assert result["evidence"]["canary_matched"] is True
 
 
-def test_caller_scope_other_identity_data_passes():
+def test_caller_scope_generic_overlap_is_inconclusive():
     result = scoped()
+    assert (result["verdict"], result.get("reason")) == ("INCONCLUSIVE", "overlap_without_canary")
+
+
+def test_caller_scope_disjoint_identity_data_passes():
+    result = scoped(forbidden=observation(body={"id": "object-b", "region": "EU"}))
     assert (result["verdict"], result.get("reason")) == ("PASS", None)
     assert result["note"] == "caller_scoped"
 

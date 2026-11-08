@@ -25,7 +25,7 @@ from pkg.integrations import TrackerError, load_integrations, process_tickets
 from pkg.observability import github_summary, log_event, metrics_text, write_metrics
 from pkg.parser import load_inventory
 from pkg.reporter import notify, write_junit, write_sarif
-from pkg.rules import load_rules, run_rules
+from pkg.rules import RulesError, load_rules, run_rules
 from pkg.results import (apply_baseline, baseline_document, build_document,
                          diff_documents, gate_exit, load_document, write_document)
 from pkg.suppressions import apply_suppressions, load_suppressions
@@ -169,7 +169,7 @@ async def execute(args: argparse.Namespace) -> int:
     rules = load_rules(args.rules, accept_generated=args.accept_generated,
                        experimental=args.experimental)
     if not rules:
-        raise ValueError("at least one rule is required")
+        raise RulesError("Rules file is empty; at least one rule is required")
     inputs = read_inputs(args.inputs)
     auth_config = load_auth_config(args.auth) if args.auth else None
     if auth_config is not None:
@@ -367,6 +367,9 @@ def main(argv=None) -> int:
     args = arguments(values)
     try:
         return asyncio.run(execute(args))
+    except RulesError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
     except (ValueError, OSError, ImportError, httpx.HTTPError) as exc:
         # Exception text from HTTP clients/JSON parsers can include credentials.
         print(f"error: scan/configuration failure ({type(exc).__name__}); verify spec, inputs, target and webhook configuration", file=sys.stderr)

@@ -229,17 +229,8 @@ def _junit_results(path: Path) -> dict[str, dict[str, str | None]]:
             item.get("name", "").removeprefix("ledgerprobe."): item.get("value", "")
             for item in case.findall("./properties/property")
         }
-        verdict = properties.get("verdict")
+        verdict = properties.get("verdict") or "MISSING"
         reason = properties.get("reason")
-        if verdict is None:
-            if case.find("failure") is not None:
-                verdict = "FAIL"
-            elif case.find("error") is not None:
-                verdict = "ERROR"
-            elif case.find("skipped") is not None:
-                verdict = "INCONCLUSIVE"
-            else:
-                verdict = "PASS"
         results[rule_id] = {"verdict": verdict, "reason": reason or "",
                             "spec_drift": properties.get("spec_drift", ""),
                             "name": case.get("name") or ""}

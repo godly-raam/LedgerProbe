@@ -449,6 +449,11 @@ async def handle_profile(request: Request) -> Response:
         return JSONResponse({"error": "unauthorized"}, status_code=401)
     owner_data = {"id": "obj-owner-1", "owner_id": "user_owner",
                   "canary": "canary-secret-owner-9988", "email": "owner@example.test"}
+    if get_profile(request) == "caller_scoped_generic_overlap":
+        generic = {"status": "ok", "currency": "USD", "fee": "1.00", "region": "US-EAST"}
+        if identity == "owner":
+            return JSONResponse({**generic, "canary": "canary-secret-owner-9988"}, status_code=200)
+        return JSONResponse({**generic, "canary": "canary-secret-other-1122"}, status_code=200)
     if identity == "owner" or get_profile(request) == "caller_scoped_cross_contamination":
         return JSONResponse(owner_data, status_code=200)
     return JSONResponse({"id": "obj-other-1", "owner_id": "user_other",

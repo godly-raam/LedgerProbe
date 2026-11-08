@@ -238,7 +238,7 @@ def _validate_rules(rules, *, require_mutating=True, accept_generated=False, exp
                      "require_primary_canary", "scope", "require_owner_canary_in_baseline", "spec_check",
                      "mutating", "verify", "restore", "race", "remediation",
                      "check", "privileged", "unprivileged", "request", "inject",
-                     "readback", "ledger", "limits", "cases", "_case",
+                     "readback", "ledger", "limits", "cases", "_case", "max_attempts",
                      "generated_from", "review_required", "scope_confidence", "disabled"},
               {"id", "name", "severity", "owasp_category", "cvss_score", "target_endpoints"})
         if "generated_from" in rule and rule["generated_from"] not in {"har", "postman", "mitm"}:
@@ -267,6 +267,23 @@ def _validate_rules(rules, *, require_mutating=True, accept_generated=False, exp
             if not isinstance(fields, list) or any(
                     not isinstance(item, (str, dict)) for item in fields):
                 raise ValueError("mass_assignment.inject must be strings or mappings")
+            attempts = rule.get("max_attempts", 2)
+            if type(attempts) is not int or not 1 <= attempts <= 3:
+                raise ValueError("mass_assignment.max_attempts must be 1, 2 or 3")
+            for item in fields:
+                if isinstance(item, str):
+                    continue
+                _keys(item, {"name", "type", "values"}, {"name"})
+                if not isinstance(item["name"], str) or not item["name"]:
+                    raise ValueError("mass_assignment.inject name must be a nonempty string")
+                if item.get("type", "string") not in {"string", "number", "boolean"}:
+                    raise ValueError("mass_assignment.inject type must be string, number or boolean")
+                if "values" in item:
+                    values = item["values"]
+                    if (not isinstance(values, list) or not values or len(values) > 10
+                            or any(isinstance(value, (dict, list)) or value is None
+                                   for value in values)):
+                        raise ValueError("mass_assignment.inject values must be nonempty scalars")
         if rule.get("check") == "business_limit":
             if not isinstance(rule.get("request"), dict) or not isinstance(rule.get("ledger"), dict):
                 raise ValueError("business_limit requires request and ledger mappings")
@@ -446,8 +463,8 @@ def _validate_rules(rules, *, require_mutating=True, accept_generated=False, exp
                 raise ValueError("require_owner_canary_in_baseline requires leak_detection.canaries")
             if scope == "caller" and require_owner_canary is not True:
                 raise ValueError("caller scope requires require_owner_canary_in_baseline: true")
-            if scope == "caller" and not canaries:
-                raise ValueError("caller scope requires leak_detection.canaries")
+            if scope in {"caller", "shared"} and not canaries:
+                raise ValueError(f"{scope} scope requires leak_detection.canaries")
         if mutating and (set(auth) != {"primary", "forbidden"} or auth["primary"] == auth["forbidden"]):
             raise ValueError("Mutating rules require distinct primary and forbidden contexts")
 
@@ -519,6 +536,10 @@ def _expand_checks(rules):
     return output
 
 
+class RulesError(ValueError):
+    """A rule file is missing, empty, or otherwise unusable."""
+
+
 def load_rules(paths: Iterable[str], *, accept_generated: bool = False,
                experimental: bool = False) -> list[dict[str, Any]]:
     """Load UTF-8 YAML files; raise ValueError on any invalid/duplicate rule."""
@@ -529,6 +550,8 @@ def load_rules(paths: Iterable[str], *, accept_generated: bool = False,
         try:
             with Path(path).open(encoding="utf-8") as stream:
                 document = yaml.load(stream, Loader=_RuleLoader)
+        except OSError:
+            raise RulesError(f"Rules file could not be read: {Path(path).name}") from None
         except yaml.YAMLError:
             raise ValueError("Malformed rule YAML") from None
         if isinstance(document, dict):
@@ -1128,73 +1151,112 @@ def _readback_paths(readback):
     return list(paths) if isinstance(paths, list) else []
 
 
-async def _execute_mass_assignment(runtime, rule, variables, primary, forbidden):
+def _mass_field_schema(schema, name):
+    current = schema
+    for part in name.split("."):
+        if not isinstance(current, dict):
+            return {}
+        current = (current.get("properties") or {}).get(part, {})
+    return current if isinstance(current, dict) else {}
+
+
+def _mass_candidates(item, before_payload, schema):
+    if isinstance(item, str):
+        name, kind = item, "string"
+    else:
+        name, kind = item.get("name"), item.get("type", "string")
+    if not isinstance(name, str) or not name or kind not in {"string", "number", "boolean"}:
+        raise _Stop("Invalid mass-assignment candidate.", "error", "invalid_rule")
+    if isinstance(item, dict) and "values" in item:
+        return name, kind, list(item["values"])
+    field_schema = _mass_field_schema(schema, name)
+    enum = field_schema.get("enum")
+    if isinstance(enum, list) and enum:
+        previous = _lookup(before_payload, name)
+        chosen = next((value for value in enum if value != previous), None)
+        if chosen is not None:
+            return name, kind, [chosen]
+    previous = _lookup(before_payload, name)
+    if kind == "boolean":
+        return name, kind, [not (previous if isinstance(previous, bool) else False)]
+    if kind == "number":
+        return name, kind, [7_391_528]
+    return name, kind, ["lp-marker-" + secrets.token_hex(12)]
+
+
+async def _execute_mass_assignment(runtime, endpoint, rule, variables, primary, forbidden):
     readback = rule["readback"]
     snapshot_request = readback.get("request", readback)
-    paths = _readback_paths(readback)
     try:
         before_response = await runtime.custom_request(snapshot_request, variables, primary, forbidden)
         before_payload = before_response.json()
     except (_Stop, ValueError, TypeError):
         raise _Stop("Mass-assignment readback was unavailable.", "inconclusive", "unverified_mutation")
-    before = {path: _lookup(before_payload, path) for path in paths}
-    inject = rule.get("inject") or list(MASS_ASSIGNMENT_FIELDS)
     request = copy.deepcopy(rule["request"])
-    body = copy.deepcopy(request.get("body", {}))
+    base_body = copy.deepcopy(request.get("body", {}))
+    body_content = (endpoint.get("request_body") or {}).get("content", {})
+    media = next((value for kind, value in body_content.items()
+                  if kind == "application/json" or kind.endswith("+json")), {})
+    schema = media.get("schema", {}) if isinstance(media, dict) else {}
+    inject = rule.get("inject") or list(MASS_ASSIGNMENT_FIELDS)
     fields = []
-    markers = {}
+    candidates = []
     for item in inject:
-        if isinstance(item, str):
-            name, kind = item, "string"
-        else:
-            name, kind = item.get("name"), item.get("type", "string")
-        if not isinstance(name, str) or not name or kind not in {"string", "number", "boolean"}:
-            raise _Stop("Invalid mass-assignment candidate.", "error", "invalid_rule")
-        previous = _lookup(before_payload, name)
-        if kind == "boolean":
-            value = not (previous if isinstance(previous, bool) else False)
-        elif kind == "number":
-            value = 7_391_528 + len(fields)
-        else:
-            value = "lp-marker-" + secrets.token_hex(12)
-        _set_path(body, name, value)
+        name, _kind, values = _mass_candidates(item, before_payload, schema)
         fields.append(name)
-        markers[name] = value
-    request["body"] = body
-    attempted = False
+        candidates.append(values)
+    max_attempts = rule.get("max_attempts", 2)
+    attempts = min(max_attempts, max((len(values) for values in candidates), default=1))
     status = None
     after = {}
-    try:
-        attempted = True
-        response = await runtime.custom_request(request, variables, primary, forbidden)
-        status = response.status_code
-        if 200 <= status < 300:
-            try:
-                after_response = await runtime.custom_request(snapshot_request, variables, primary, forbidden)
-                after_payload = after_response.json()
-            except (_Stop, ValueError, TypeError):
-                after_payload = None
-            if after_payload is None:
-                raise _Stop("Mass-assignment readback was unavailable after the mutation.",
-                            "inconclusive", "unverified_mutation")
-            after = {name: _lookup(after_payload, readback.get("paths", {}).get(name, name)
-                                   if isinstance(readback.get("paths"), dict) else name)
-                     for name in fields}
-    finally:
-        if attempted:
+    markers = {}
+    for attempt in range(attempts):
+        body = copy.deepcopy(base_body)
+        markers = {}
+        for name, values in zip(fields, candidates):
+            value = values[min(attempt, len(values) - 1)]
+            _set_path(body, name, value)
+            markers[name] = value
+        request["body"] = body
+        try:
+            response = await runtime.custom_request(request, variables, primary, forbidden)
+            status = response.status_code
+            if 200 <= status < 300:
+                try:
+                    after_response = await runtime.custom_request(
+                        snapshot_request, variables, primary, forbidden)
+                    after_payload = after_response.json()
+                except (_Stop, ValueError, TypeError):
+                    after_payload = None
+                if after_payload is None:
+                    raise _Stop("Mass-assignment readback was unavailable after the mutation.",
+                                "inconclusive", "unverified_mutation")
+                after = {name: _lookup(after_payload,
+                                       readback.get("paths", {}).get(name, name)
+                                       if isinstance(readback.get("paths"), dict) else name)
+                         for name in fields}
+        finally:
             await _restore_mutation(runtime, rule, variables, primary, forbidden)
+        if 200 <= (status or 0) < 300 and any(after.get(name) == markers[name] for name in fields):
+            break
+        if 400 <= (status or 0) < 500:
+            break
+        if not 200 <= (status or 0) < 300 and status != 429 and not 500 <= status < 600:
+            break
+    confirmed = sum(after.get(name) == markers[name] for name in fields)
     evidence = {"mutation_status": status, "fields_injected": len(fields),
-                "fields": fields,
-                "fields_confirmed": sum(after.get(name) == markers[name] for name in fields)}
+                "fields": fields, "fields_confirmed": confirmed}
     if status is not None and 400 <= status < 500:
         return {"status": "passed", "verdict": "PASS", "confidence": "high",
                 "message": "Mass-assignment request was rejected.", "note": "rejected",
                 "evidence": evidence}
     if not 200 <= (status or 0) < 300:
+        reason = "server_error" if 500 <= (status or 0) < 600 else (
+            "rate_limited" if status == 429 else "unexpected_status")
         return {"status": "inconclusive", "verdict": "INCONCLUSIVE", "confidence": "reduced",
-                "message": "Mass-assignment request returned an unexpected status.",
-                "reason": "unexpected_status", "evidence": evidence}
-    if evidence["fields_confirmed"]:
+                "message": f"Mass-assignment request returned HTTP {status}.",
+                "reason": reason, "evidence": evidence}
+    if confirmed:
         return {"status": "failed", "verdict": "FAIL", "confidence": "high",
                 "message": "Privileged fields were persisted.", "reason": "mass_assignment",
                 "evidence": evidence}
@@ -1754,7 +1816,7 @@ async def run_rules(inventory: dict, rules: list[dict], client,
                         raise _Stop(f"Mutation blocked: {missing}.", "skipped", "mutation_blocked")
                     if rule.get("check") == "mass_assignment":
                         result.update(await _execute_mass_assignment(
-                            runtime, rule, runtime.variables, primary, forbidden))
+                            runtime, endpoint, rule, runtime.variables, primary, forbidden))
                         results.append(result)
                         continue
                     if rule.get("check") == "business_limit":

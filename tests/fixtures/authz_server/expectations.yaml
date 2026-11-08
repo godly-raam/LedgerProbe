@@ -306,6 +306,14 @@ caller_scoped_cross_contamination:
   rule_file: rules_scope_caller.yaml
   description: "Caller-scoped endpoint returns owner data to another identity"
 
+caller_scoped_generic_overlap:
+  category: tricky
+  expected_verdict: INCONCLUSIVE
+  expected_reason: overlap_without_canary
+  expected_note: null
+  rule_file: rules_scope_caller.yaml
+  description: "Caller-scoped response shares generic fields but exposes no owner canary; overlap alone must not fail"
+
 caller_scoped_ok:
   category: safe
   expected_verdict: PASS
