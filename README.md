@@ -20,6 +20,10 @@ Counts are `TP/FP/TN/FN/INC_vuln/INC_safe`. `INCONCLUSIVE` is never counted as c
 
 `legacy_strict` is the engine's exact-403 assertion. `legacy_lenient` is a benchmark-harness policy that passes `{401,403,404}`; it is not an engine mode. `differential` adds scoped owner/other comparison, canaries, controls, and confirmation. `crapi-order-object` is a **reduced-confidence FAIL** in v2 and v3 because its nonexistent-object control returned 500 and could not separate generic overlap from owner data. See [`docs/BENCHMARK.md`](docs/BENCHMARK.md) for the per-case table, target-mode and ground-truth columns, object-scoped cut, provenance, and determinants.
 
+### Extension validation (first run)
+
+The separate preregistered extension adds **19 cases across VAmPI, crAPI, and DVR**; rules were authored once from each target's docs, source, and OpenAPI and were not tuned after the run. First-run counts are **2/2/4/0/2/1/8** (`TP/FP/TN/FN/INC_vuln/INC_safe/NOT RUN`): **2 of 8** vulnerable cases were detected and **4 of 11** safe cases correctly passed. By class, **BFLA 1 of 3**, **BOLA 1 of 2**, and **mass assignment 0 of 3** documented vulnerable cases were detected. Eight cases could not run under the restore contract (four vulnerable, four safe); crAPI produced no verdicts. See [`docs/VALIDATION.md`](docs/VALIDATION.md).
+
 ## Install
 
 Install the CLI from GitHub with pipx:
@@ -116,11 +120,11 @@ Reason codes include `leak_detected`, `unauthenticated_leak`, `state_changed_by_
 
 | Check | Status |
 | --- | --- |
-| BOLA / IDOR | Benchmarked on VAmPI and crAPI. |
-| State-changing BOLA | Benchmarked on VAmPI (owner-login probe and restore). |
-| Race conditions | Fixtures only; no live VAmPI/crAPI race benchmark. |
-| BFLA | Fixtures only; not yet benchmarked on real targets. |
-| Mass assignment | **Experimental, untested**; requires `--experimental`. |
+| BOLA / IDOR | Benchmarked on VAmPI and crAPI; DVR added in the extension first run. |
+| State-changing BOLA | Benchmarked on VAmPI (owner-login probe and restore) and DVR (restore). |
+| Race conditions | Fixtures only; no live VAmPI/crAPI/DVR race benchmark. |
+| BFLA | Benchmarked on DVR; the crAPI case is NOT RUN under the restore contract, and the VAmPI safe case is also NOT RUN. |
+| Mass assignment | **Experimental**; the first extension run detected 0 of 3 vulnerable cases (1 TN, 1 INC_safe, 1 NOT RUN). Requires `--experimental`. |
 | Business limits | **Experimental, untested**; requires `--experimental`. |
 
 Race synchronization supports `burst`, HTTP/1.1 `last_byte`, and an optional `h2_single_packet` mode that is **not tested** because `h2` is not installed here. See [`docs/RACE.md`](docs/RACE.md) for the N=50 fixture study and honest detection rates. BFLA and the experimental checks are documented in [`docs/CHECKS_NEW.md`](docs/CHECKS_NEW.md).
@@ -151,7 +155,8 @@ See [`docs/INTEGRATIONS.md`](docs/INTEGRATIONS.md) for configuration and [`docs/
 ## Limitations
 
 - INCONCLUSIVE means the evidence did not support PASS or FAIL. It is not a clean result.
-- The benchmark is 23 cases across 18 endpoints, same-author, source-derived, and has no confidence intervals.
+- The legacy benchmark is 23 cases across 18 endpoints, same-author, and source-derived. The 19-case extension reports Wilson intervals, but its classes have only 1–4 cases each, so the intervals are wide.
+- The extension is dominated by DVR (13 of 19 cases); DVR is a teaching application, not a production architecture.
 - Race results are local fixture measurements; a PASS only means no violation was observed in the tested rounds.
 - Scope declarations (`object`, `caller`, `shared`) are supplied by the rule author and are not independently verified.
 - Host allowlisting and mutation gates are not a network sandbox; scan only systems you are authorized to test.
