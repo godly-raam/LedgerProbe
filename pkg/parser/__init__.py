@@ -119,6 +119,45 @@ def _pointer(document, ref):
     return value
 
 
+def _merge_composition(value: dict) -> dict:
+    """Flatten simple allOf/oneOf/anyOf schema compositions after ref resolution."""
+    keywords = ("allOf", "oneOf", "anyOf")
+    branches = []
+    for keyword in keywords:
+        children = value.get(keyword)
+        if isinstance(children, list):
+            branches.extend(child for child in children if isinstance(child, dict))
+    if not branches:
+        return value
+    merged = {}
+    properties = {}
+    required = []
+    for branch in branches:
+        for key, child in branch.items():
+            if key in keywords:
+                continue
+            if key == "properties" and isinstance(child, dict):
+                properties.update(child)
+            elif key == "required" and isinstance(child, list):
+                required.extend(item for item in child if isinstance(item, str))
+            else:
+                merged[key] = child
+    for key, child in value.items():
+        if key in keywords:
+            continue
+        if key == "properties" and isinstance(child, dict):
+            properties.update(child)
+        elif key == "required" and isinstance(child, list):
+            required.extend(item for item in child if isinstance(item, str))
+        else:
+            merged[key] = child
+    if properties:
+        merged["properties"] = properties
+    if required:
+        merged["required"] = list(dict.fromkeys(required))
+    return merged
+
+
 def _resolve(value, document, refs=(), depth=0) -> Any:
     if depth >= _MAX_DEPTH:
         raise ValueError("Local reference resolution exceeds the nesting limit")
@@ -133,9 +172,11 @@ def _resolve(value, document, refs=(), depth=0) -> Any:
         target = _resolve(_pointer(document, ref), document, refs + (ref,), depth + 1)
         if not isinstance(target, dict):
             raise ValueError(f"$ref {ref!r} must point to an object")
-        return {**target, **_resolve({k: v for k, v in value.items() if k != "$ref"},
-                                    document, refs + (ref,), depth + 1)}
-    return {key: _resolve(child, document, refs, depth + 1) for key, child in value.items()}
+        return _merge_composition({**target, **_resolve(
+            {k: v for k, v in value.items() if k != "$ref"},
+            document, refs + (ref,), depth + 1)})
+    return _merge_composition({key: _resolve(child, document, refs, depth + 1)
+                               for key, child in value.items()})
 
 
 def parse_document(document: dict, source: str = "") -> dict:
