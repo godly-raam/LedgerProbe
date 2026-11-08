@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import tempfile
 from datetime import datetime, timezone
+from importlib.resources import files
 from pathlib import Path
 
 from .auth import SecretResolver, redact
@@ -51,7 +52,7 @@ def write_export(results, path, *, target):
     payload = build_export(results, target=target)
     try:
         import jsonschema
-        schema_path = Path(__file__).parents[1] / "schemas" / "defectdojo.generic.schema.json"
+        schema_path = files("schemas").joinpath("defectdojo.generic.schema.json")
         jsonschema.Draft202012Validator(json.loads(schema_path.read_text(encoding="utf-8"))).validate(payload)
     except ImportError:
         pass  # jsonschema is a development-only validation dependency

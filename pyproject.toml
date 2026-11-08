@@ -7,12 +7,18 @@ name = "ledgerprobe"
 dynamic = ["version"]
 description = "API authorization and business-logic testing engine"
 readme = "README.md"
+license = { text = "MIT" }
+keywords = ["api", "security", "authorization", "bola", "idor", "openapi", "sarif"]
 requires-python = ">=3.11"
 dependencies = [
   "httpx>=0.27,<1.0",
   "PyYAML>=6.0,<7",
   "openapi-spec-validator>=0.7.2,<0.8",
 ]
+
+[project.urls]
+Homepage = "https://github.com/godly-raam/LedgerProbe"
+Issues = "https://github.com/godly-raam/LedgerProbe/issues"
 
 [project.optional-dependencies]
 dev = [
@@ -36,9 +42,13 @@ ledgerprobe = "ledgerprobe:main"
 
 [tool.setuptools]
 py-modules = ["ledgerprobe"]
+include-package-data = true
 
 [tool.setuptools.dynamic]
 version = {attr = "pkg.version.__version__"}
 
 [tool.setuptools.packages.find]
-include = ["pkg*"]
+include = ["pkg*", "schemas*"]
+
+[tool.setuptools.package-data]
+schemas = ["*.json"]
