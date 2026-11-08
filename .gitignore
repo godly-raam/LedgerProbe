@@ -25,3 +25,5 @@ dashboard/*.tsbuildinfo
 
 # Benchmark runtime: tokens, databases, reports, cloned upstream sources
 benchmark/.out/
+
+*.egg-info/
