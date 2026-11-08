@@ -9,7 +9,7 @@ jobs:
   scan:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4  # TODO: pin SHA
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - id: ledgerprobe
         uses: ./
         with:
@@ -23,7 +23,7 @@ jobs:
       - if: github.event_name == 'pull_request'
         run: ledgerprobe diff ledgerprobe-baseline.json "${{ steps.ledgerprobe.outputs.results }}"
       - if: always() && steps.ledgerprobe.outputs.sarif != ''
-        uses: actions/upload-artifact@v4  # TODO: pin SHA
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: ledgerprobe-results
           path: ${{ steps.ledgerprobe.outputs.sarif }}
@@ -35,10 +35,10 @@ jobs:
       contents: read
       security-events: write
     steps:
-      - uses: actions/checkout@v4  # TODO: pin SHA
-      - uses: actions/download-artifact@v4  # TODO: pin SHA
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: ledgerprobe-results
-      - uses: github/codeql-action/upload-sarif@v3  # TODO: pin SHA
+      - uses: github/codeql-action/upload-sarif@9418214df1f2c4b8128c770156c409013b07d6b9 # v3
         with:
           sarif_file: ledgerprobe-results.sarif
