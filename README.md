@@ -20,24 +20,45 @@ Counts are `TP/FP/TN/FN/INC_vuln/INC_safe`. `INCONCLUSIVE` is never counted as c
 
 `legacy_strict` is the engine's exact-403 assertion. `legacy_lenient` is a benchmark-harness policy that passes `{401,403,404}`; it is not an engine mode. `differential` adds scoped owner/other comparison, canaries, controls, and confirmation. `crapi-order-object` is a **reduced-confidence FAIL** in v2 and v3 because its nonexistent-object control returned 500 and could not separate generic overlap from owner data. See [`docs/BENCHMARK.md`](docs/BENCHMARK.md) for the per-case table, target-mode and ground-truth columns, object-scoped cut, provenance, and determinants.
 
-## Quick start
+## Install
 
-Docker image:
+Install the CLI from GitHub with pipx:
 
 ```bash
-docker build -t ledgerprobe:local .
-docker run --rm ledgerprobe:local --version
+pipx install git+https://github.com/godly-raam/LedgerProbe.git
+pipx upgrade ledgerprobe
 ```
 
-Python install:
+### pip in a virtual environment (development)
 
 ```bash
+git clone https://github.com/godly-raam/LedgerProbe.git
+cd LedgerProbe
 python3 -m venv .venv
 . .venv/bin/activate
 python -m pip install -e ".[dev]"
 ```
 
-Five-minute lab fixture demo. Start the fixture, then prepare the spec and auth references. The demo password is read from `LEDGERPROBE_DEMO_PASSWORD` at scan time and is not written to disk:
+### Docker (local build)
+
+From a clone, build the CLI image locally:
+
+```bash
+git clone https://github.com/godly-raam/LedgerProbe.git
+cd LedgerProbe
+docker build -t ledgerprobe .
+docker run --rm ledgerprobe --version
+```
+
+### Kali Linux
+
+Kali's system Python is externally managed. Use `pipx install git+https://github.com/godly-raam/LedgerProbe.git` instead of installing into the system interpreter with `pip`.
+
+The example rules and the demo live in the repository, not in the installed CLI. Clone the repository for `rulesets/`, `examples/`, and the `mock-bank-api` fixture.
+
+## Quick start
+
+The demo fixture and example rules are repository files. From a clone, start the fixture, then prepare the spec and auth references. The demo password is read from `LEDGERPROBE_DEMO_PASSWORD` at scan time and is not written to disk:
 
 ```bash
 export LEDGERPROBE_DEMO_PASSWORD=demo1234
