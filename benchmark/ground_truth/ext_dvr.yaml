@@ -1,0 +1,254 @@
+# Source-derived ground truth for the Damn Vulnerable RESTaurant API Game.
+#
+# Labels were written from the upstream README, application source, and its own
+# level tests before any LedgerProbe target run. No LedgerProbe results were
+# consulted.
+#
+# Upstream snapshot:
+#   repository: https://github.com/theowni/Damn-Vulnerable-RESTaurant-API-Game
+#   commit:     d32d09972aec7830f5f1d4a5d274cac7aae7eb82
+#
+# DVR uses role-based authorization with Chef, Employee, and Customer roles.
+# There is no global secure/fixed runtime toggle: the developer-mode game asks
+# the player to edit source and validates fixes with app/tests/vulns/level_*.py.
+# Safe cases below cite endpoints with explicit role or ownership checks.
+
+target: dvr
+title: Damn Vulnerable RESTaurant API Game
+upstream:
+  repository: https://github.com/theowni/Damn-Vulnerable-RESTaurant-API-Game
+  commit: d32d09972aec7830f5f1d4a5d274cac7aae7eb82
+  image: built locally from the commit; no published image is used
+
+instances:
+  default:
+    description: Single Docker Compose deployment with the upstream vulnerable source.
+    base_url: http://127.0.0.1:8091
+
+counts:
+  bola:
+    vulnerable: 2
+    safe: 4
+  bfla:
+    vulnerable: 2
+    safe: 3
+  mass_assignment:
+    vulnerable: 1
+    safe: 1
+  business_limit:
+    vulnerable: 0
+    safe: 0
+  race:
+    vulnerable: 0
+    safe: 0
+
+none_documented:
+  business_limit: >-
+    The repository documents referral coupons but does not document a
+    business-limit abuse case or an endpoint-specific expected limit violation.
+  race: >-
+    No endpoint-specific race or concurrent-consumption case is documented in
+    the README, source comments, or app/tests/vulns/level_*.py.
+
+cases:
+  - id: dvr-bola-profile-update
+    class: bola
+    label: vulnerable
+    method: PUT
+    path_template: /profile
+    roles:
+      attacker: authenticated Customer
+      victim: another Customer
+    expected_effect: >-
+      The caller supplies another user's username and changes that user's
+      first name, last name, and phone number.
+    source: >-
+      d32d09972aec7830f5f1d4a5d274cac7aae7eb82:
+      app/tests/vulns/level_2_unrestricted_profile_update_IDOR.py:6-49;
+      app/apis/auth/services/update_profile_service.py:21-37
+
+  - id: dvr-bola-order-read
+    class: bola
+    label: vulnerable
+    method: GET
+    path_template: /orders/{order_id}
+    roles:
+      attacker: authenticated Customer
+      victim: another Customer
+    expected_effect: >-
+      A Customer can retrieve another Customer's order by changing the numeric
+      order id because the handler checks the role but not the order owner.
+    source: >-
+      d32d09972aec7830f5f1d4a5d274cac7aae7eb82:
+      app/apis/orders/services/get_order_service.py:11-20
+
+  - id: dvr-bola-order-status-safe
+    class: bola
+    label: safe
+    method: GET
+    path_template: /orders/status/{order_id}
+    roles:
+      attacker: authenticated Customer
+      victim: another Customer
+    expected_effect: >-
+      The handler returns 404 when the selected order is not owned by the JWT
+      subject, so another Customer's order status is not disclosed.
+    source: >-
+      d32d09972aec7830f5f1d4a5d274cac7aae7eb82:
+      app/apis/orders/services/get_order_status.py:19-30
+
+  - id: dvr-bola-orders-list-safe
+    class: bola
+    label: safe
+    method: GET
+    path_template: /orders
+    roles:
+      attacker: authenticated Customer
+      victim: another Customer
+    expected_effect: >-
+      The list query is constrained to `Order.user_id == current_user.id`, so
+      the caller receives only their own orders.
+    source: >-
+      d32d09972aec7830f5f1d4a5d274cac7aae7eb82:
+      app/apis/orders/services/get_orders_service.py:14-28
+
+  - id: dvr-bola-profile-read-safe
+    class: bola
+    label: safe
+    method: GET
+    path_template: /profile
+    roles:
+      attacker: authenticated Customer
+      victim: another Customer
+    expected_effect: >-
+      The profile endpoint returns the JWT subject's profile and accepts no
+      caller-supplied user identifier.
+    source: >-
+      d32d09972aec7830f5f1d4a5d274cac7aae7eb82:
+      app/apis/auth/services/get_profile_service.py:9-11
+
+  - id: dvr-bola-coupons-safe
+    class: bola
+    label: safe
+    method: GET
+    path_template: /discount-coupons
+    roles:
+      attacker: authenticated Customer
+      victim: another Customer
+    expected_effect: >-
+      The coupon query filters on `DiscountCoupon.user_id == current_user.id`,
+      so no other Customer's coupons are returned.
+    source: >-
+      d32d09972aec7830f5f1d4a5d274cac7aae7eb82:
+      app/apis/referrals/service.py:77-86
+
+  - id: dvr-bfla-menu-delete
+    class: bfla
+    label: vulnerable
+    method: DELETE
+    path_template: /menu/{item_id}
+    roles:
+      attacker: authenticated Customer
+      victim: Employee and Chef menu-management function
+    expected_effect: >-
+      A Customer deletes a menu item because the required Employee/Chef role
+      dependency is commented out in the delete handler.
+    source: >-
+      d32d09972aec7830f5f1d4a5d274cac7aae7eb82:
+      app/tests/vulns/level_1_unrestricted_menu_item_deletion.py:6-36;
+      app/apis/menu/services/delete_menu_item_service.py:12-19
+
+  - id: dvr-bfla-update-role
+    class: bfla
+    label: vulnerable
+    method: PUT
+    path_template: /users/update_role
+    roles:
+      attacker: authenticated Customer
+      victim: application role boundary and other users
+    expected_effect: >-
+      A Customer updates their own role to Employee because the handler checks
+      only the Chef-role target and not the caller's authorization.
+    source: >-
+      d32d09972aec7830f5f1d4a5d274cac7aae7eb82:
+      app/tests/vulns/level_3_privilege_escalation.py:6-50;
+      app/apis/users/services/update_user_role_service.py:12-27
+
+  - id: dvr-bfla-menu-create-safe
+    class: bfla
+    label: safe
+    method: PUT
+    path_template: /menu
+    roles:
+      attacker: authenticated Customer
+      victim: Employee and Chef menu-management function
+    expected_effect: >-
+      The create handler requires Employee or Chef, so a Customer receives 403
+      and cannot add a menu item.
+    source: >-
+      d32d09972aec7830f5f1d4a5d274cac7aae7eb82:
+      app/apis/menu/services/create_menu_item_service.py:12-22;
+      app/apis/auth/utils/roles_based_auth_checker.py:6-17
+
+  - id: dvr-bfla-menu-update-safe
+    class: bfla
+    label: safe
+    method: PUT
+    path_template: /menu/{item_id}
+    roles:
+      attacker: authenticated Customer
+      victim: Employee and Chef menu-management function
+    expected_effect: >-
+      The update handler requires Employee or Chef, so a Customer receives 403
+      and cannot modify a menu item.
+    source: >-
+      d32d09972aec7830f5f1d4a5d274cac7aae7eb82:
+      app/apis/menu/services/update_menu_item_service.py:12-20;
+      app/apis/auth/utils/roles_based_auth_checker.py:6-17
+
+  - id: dvr-bfla-admin-stats-safe
+    class: bfla
+    label: safe
+    method: GET
+    path_template: /admin/stats/disk
+    roles:
+      attacker: authenticated Customer or Employee
+      victim: Chef administration function
+    expected_effect: >-
+      A non-Chef caller receives 403; only a Chef JWT subject can read disk
+      statistics.
+    source: >-
+      d32d09972aec7830f5f1d4a5d274cac7aae7eb82:
+      app/apis/admin/services/get_disk_stats_service.py:13-27
+
+  - id: dvr-mass-assignment-profile-patch
+    class: mass_assignment
+    label: vulnerable
+    method: PATCH
+    path_template: /profile
+    roles:
+      attacker: authenticated Customer
+      victim: the caller's own account and the role boundary
+    expected_effect: >-
+      The `Extra.allow` request model accepts undeclared attributes and the
+      handler assigns them to the user model, allowing fields such as `role` to
+      be changed.
+    source: >-
+      d32d09972aec7830f5f1d4a5d274cac7aae7eb82:
+      app/apis/auth/services/patch_profile_service.py:22-43;
+      app/db/models.py:33-45
+
+  - id: dvr-mass-assignment-profile-put-safe
+    class: mass_assignment
+    label: safe
+    method: PUT
+    path_template: /profile
+    roles:
+      attacker: authenticated Customer
+      victim: the caller's own account
+    expected_effect: >-
+      The fixed update model accepts only declared profile fields, so an extra
+      `role` field is ignored rather than assigned to the user model.
+    source: >-
+      d32d09972aec7830f5f1d4a5d274cac7aae7eb82:
+      app/apis/auth/services/update_profile_service.py:14-31

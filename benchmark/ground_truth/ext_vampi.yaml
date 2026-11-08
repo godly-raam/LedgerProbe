@@ -1,0 +1,126 @@
+# Additional source-derived ground truth for erev0s/VAmPI.
+#
+# These cases supplement benchmark/ground_truth/vampi.yaml and deliberately do
+# not repeat its existing book, password, user-read/list/debug, home, or /me
+# cases. Labels were written from the target documentation and source only; no
+# LedgerProbe target output was consulted.
+#
+# Upstream snapshot:
+#   repository: https://github.com/erev0s/VAmPI
+#   commit:     f16052dce83f05847133ec98f01c5193a41de7d8
+#   image:      erev0s/vampi@sha256:0a5a224b6e14ae7da6a6ea265178ff71286ff903aec74adee98f660bb0e4ca12
+#
+# VAmPI has a global `vulnerable=1|0` switch. The secure registration case uses
+# the same endpoint with `vulnerable=0`; the delete-user and email cases are
+# safe in both modes because their handlers enforce the admin check and derive
+# the target from the JWT subject respectively.
+
+target: vampi
+title: VAmPI
+upstream:
+  repository: https://github.com/erev0s/VAmPI
+  commit: f16052dce83f05847133ec98f01c5193a41de7d8
+  image: erev0s/vampi@sha256:0a5a224b6e14ae7da6a6ea265178ff71286ff903aec74adee98f660bb0e4ca12
+
+instances:
+  vulnerable:
+    description: VAmPI with `vulnerable=1`.
+    env:
+      vulnerable: "1"
+      tokentimetolive: "3600"
+  secure:
+    description: VAmPI with `vulnerable=0`; the secure switch exists upstream.
+    env:
+      vulnerable: "0"
+      tokentimetolive: "3600"
+
+counts:
+  bola:
+    vulnerable: 0
+    safe: 1
+  bfla:
+    vulnerable: 0
+    safe: 1
+  mass_assignment:
+    vulnerable: 1
+    safe: 1
+  business_limit:
+    vulnerable: 0
+    safe: 0
+  race:
+    vulnerable: 0
+    safe: 0
+
+none_documented:
+  business_limit: >-
+    The README lists lack of resources/rate limiting and RegexDOS, but it does
+    not identify a specific endpoint and expected business-limit effect.
+  race: >-
+    No endpoint-specific race or concurrent-consumption case is documented in
+    the README, OpenAPI document, or source comments.
+
+cases:
+  - id: vampi-mass-assignment-register-admin
+    instance: vulnerable
+    class: mass_assignment
+    label: vulnerable
+    method: POST
+    path_template: /users/v1/register
+    roles:
+      attacker: anonymous registrant
+      victim: existing users and administrators
+    expected_effect: >-
+      A caller registers an account with `admin: true`, and the resulting
+      account has administrator privileges.
+    source: >-
+      f16052dce83f05847133ec98f01c5193a41de7d8:
+      README.md:42-47; api_views/users.py:52-69
+
+  - id: vampi-mass-assignment-register-admin-secure
+    instance: secure
+    class: mass_assignment
+    label: safe
+    method: POST
+    path_template: /users/v1/register
+    roles:
+      attacker: anonymous registrant
+      victim: existing users and administrators
+    expected_effect: >-
+      With `vulnerable=0`, the registration handler ignores the supplied
+      `admin` field and creates a normal non-administrator account.
+    source: >-
+      f16052dce83f05847133ec98f01c5193a41de7d8:
+      README.md:82-90; api_views/users.py:60-69
+
+  - id: vampi-bola-email-ignores-path-user
+    instance: vulnerable
+    class: bola
+    label: safe
+    method: PUT
+    path_template: /users/v1/{username}/email
+    roles:
+      attacker: authenticated Customer
+      victim: another registered user
+    expected_effect: >-
+      The handler selects the JWT subject rather than the username in the path,
+      so the caller changes only their own email.
+    source: >-
+      f16052dce83f05847133ec98f01c5193a41de7d8:
+      api_views/users.py:132-142,161-176; openapi_specs/openapi3.yml:366-426
+
+  - id: vampi-bfla-delete-user-admin-only
+    instance: vulnerable
+    class: bfla
+    label: safe
+    method: DELETE
+    path_template: /users/v1/{username}
+    roles:
+      attacker: authenticated non-admin user
+      victim: another registered user
+    expected_effect: >-
+      A non-admin caller is rejected with 401 and cannot delete the selected
+      user; the handler accepts only an admin JWT subject.
+    source: >-
+      f16052dce83f05847133ec98f01c5193a41de7d8:
+      README.md:32; api_views/users.py:206-222;
+      openapi_specs/openapi3.yml:307-353

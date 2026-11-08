@@ -1,0 +1,93 @@
+# Additional source-derived ground truth for OWASP crAPI.
+#
+# These cases supplement benchmark/ground_truth/crapi.yaml and do not repeat its
+# vehicle, mechanic-report, order-read, community, product, dashboard, video,
+# or order-list cases. Labels were written from crAPI's own challenge
+# documentation and service source only; no LedgerProbe target output was
+# consulted.
+#
+# Upstream snapshot:
+#   repository: https://github.com/OWASP/crAPI
+#   tag:        v1.1.6
+#   commit:     700f03d12a392d9e408260b4beae72ed02a4a1a4
+#
+# crAPI has no global secure/fixed runtime mode, so no safe counterpart is
+# claimed for these two additional cases.
+
+target: crapi
+title: OWASP crAPI
+upstream:
+  repository: https://github.com/OWASP/crAPI
+  tag: v1.1.6
+  commit: 700f03d12a392d9e408260b4beae72ed02a4a1a4
+  openapi: openapi-spec/crapi-openapi-spec.json
+
+instances:
+  default:
+    description: Single crAPI deployment; no secure/fixed toggle is provided.
+    base_url: http://127.0.0.1:8888
+
+counts:
+  bola:
+    vulnerable: 0
+    safe: 0
+  bfla:
+    vulnerable: 1
+    safe: 0
+  mass_assignment:
+    vulnerable: 1
+    safe: 0
+  business_limit:
+    vulnerable: 0
+    safe: 0
+  race:
+    vulnerable: 0
+    safe: 0
+
+none_documented:
+  bola: >-
+    crAPI documents two BOLA challenges, but both are already represented in
+    benchmark/ground_truth/crapi.yaml, so no non-duplicate BOLA case is added.
+  business_limit: >-
+    The challenge list documents a layer-7 DoS against the contact-mechanic
+    feature, not a documented business-limit or resource-consumption rule with
+    an expected business outcome.
+  race: >-
+    No endpoint-specific race or concurrent-consumption case is documented in
+    docs/challenges.md or docs/challengeSolutions.md.
+
+cases:
+  - id: crapi-mass-assignment-negative-order-quantity
+    class: mass_assignment
+    label: vulnerable
+    method: POST
+    path_template: /workshop/api/shop/orders
+    roles:
+      attacker: authenticated Customer
+      victim: shop inventory and the attacker's own credit balance
+    expected_effect: >-
+      A negative `quantity` is accepted, the credit deduction becomes a credit
+      increase, and an order is created.
+    source: >-
+      700f03d12a392d9e408260b4beae72ed02a4a1a4:
+      docs/challenges.md:63-83; docs/challengeSolutions.md:59-83;
+      services/workshop/crapi/shop/views.py:184-208;
+      openapi-spec/crapi-openapi-spec.json:1727-1794
+
+  - id: crapi-bfla-admin-delete-video
+    class: bfla
+    label: vulnerable
+    method: DELETE
+    path_template: /identity/api/v2/admin/videos/{video_id}
+    roles:
+      attacker: authenticated Customer
+      victim: owner of another user's profile video
+    expected_effect: >-
+      An ordinary authenticated user reaches the admin video-deletion route and
+      deletes another user's video without an admin-role check.
+    source: >-
+      700f03d12a392d9e408260b4beae72ed02a4a1a4:
+      docs/challenges.md:55-61;
+      services/identity/src/main/java/com/crapi/controller/ProfileController.java:124-137;
+      services/identity/src/main/java/com/crapi/service/Impl/ProfileServiceImpl.java:183-195;
+      services/identity/src/main/java/com/crapi/config/WebSecurityConfig.java:85-92
