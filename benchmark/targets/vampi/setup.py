@@ -140,6 +140,7 @@ def main() -> int:
             "canary_value": canary,
             "original_password": password,
             "new_password": "LedgerProbe!43",
+            "new_email": f"new-{suffix}@ledgerprobe.test",
         },
     }
     args.out.parent.mkdir(parents=True, exist_ok=True)

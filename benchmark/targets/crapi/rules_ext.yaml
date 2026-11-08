@@ -1,0 +1,5 @@
+# Extension rules for crAPI. Both documented cases mutate state that crAPI
+# cannot restore through its API: a negative-quantity order changes the credit
+# ledger, and the BFLA video delete destroys the video. They are therefore NOT
+# RUN under the pre-registered restore contract; no weakened restore is used.
+rules: []

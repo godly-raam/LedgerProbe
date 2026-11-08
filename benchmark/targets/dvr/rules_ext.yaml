@@ -1,0 +1,286 @@
+# Extension rules for DVR, authored once from the pinned README/source and
+# app/tests/vulns/level_*.py. No LedgerProbe output was used to choose them.
+#
+# Cases that cannot satisfy the restore contract are intentionally absent and
+# are recorded as NOT RUN by benchmark/run_ext.py:
+#   dvr-bfla-menu-delete      DELETE /menu/{item_id} has no API to recreate the id.
+#   dvr-bfla-menu-create-safe PUT /menu would create an item on a regression.
+#   dvr-bfla-menu-update-safe PUT /menu/{item_id} has no restore-to-original API.
+rules:
+  - id: dvr-bola-profile-update
+    name: Another Customer must not update an owner profile
+    severity: high
+    owasp_category: API1:2023
+    cvss_score: 8.1
+    target_endpoints:
+      - path: /profile
+        method: PUT
+    auth_contexts:
+      primary: owner
+      forbidden: other
+    body:
+      username: "{{owner_username}}"
+      first_name: "{{marker}}"
+      last_name: "{{marker}}"
+      phone_number: "{{owner_phone}}"
+    mutating: true
+    acceptable_status: [401, 403, 404]
+    verify:
+      mode: state_diff
+      snapshot:
+        method: GET
+        path: /profile
+        auth: primary
+      fields: [first_name, last_name, phone_number]
+    restore:
+      - method: PUT
+        path: /profile
+        auth: primary
+        body:
+          username: "{{owner_username}}"
+          first_name: "{{owner_first_name}}"
+          last_name: "{{owner_last_name}}"
+          phone_number: "{{owner_phone}}"
+    confirm: 1
+
+  - id: dvr-bola-order-read
+    name: Another Customer must not read an owner order
+    severity: high
+    owasp_category: API1:2023
+    cvss_score: 8.1
+    target_endpoints:
+      - path: /orders/{order_id}
+        method: GET
+    auth_contexts:
+      primary: owner
+      forbidden: other
+    parameters:
+      path:
+        order_id: "{{owner_order_id}}"
+    acceptable_status: [401, 403, 404]
+    leak_detection:
+      canaries: ["{{owner_delivery_address}}"]
+      min_unique_leaf_values: 2
+      ignore_fields: []
+    controls:
+      nonexistent_object: true
+      unauthenticated: true
+    confirm: 2
+    require_primary_canary: true
+
+  - id: dvr-bola-order-status-safe
+    name: Order status must be owner-scoped
+    severity: high
+    owasp_category: API1:2023
+    cvss_score: 8.1
+    target_endpoints:
+      - path: /orders/status/{order_id}
+        method: GET
+    auth_contexts:
+      primary: owner
+      forbidden: other
+    parameters:
+      path:
+        order_id: "{{owner_order_id}}"
+    acceptable_status: [401, 403, 404]
+    leak_detection:
+      canaries: []
+      min_unique_leaf_values: 2
+      ignore_fields: []
+    controls:
+      nonexistent_object: false
+      unauthenticated: false
+    confirm: 0
+
+  - id: dvr-bola-orders-list-safe
+    name: Order list must be caller-scoped
+    severity: high
+    owasp_category: API1:2023
+    cvss_score: 8.1
+    target_endpoints:
+      - path: /orders
+        method: GET
+    auth_contexts:
+      primary: owner
+      forbidden: other
+    scope: caller
+    require_owner_canary_in_baseline: true
+    acceptable_status: [401, 403, 404]
+    leak_detection:
+      canaries: ["{{owner_delivery_address}}"]
+      min_unique_leaf_values: 2
+      ignore_fields: []
+    controls:
+      nonexistent_object: false
+      unauthenticated: false
+    confirm: 0
+
+  - id: dvr-bola-profile-read-safe
+    name: Profile read must be caller-scoped
+    severity: high
+    owasp_category: API1:2023
+    cvss_score: 8.1
+    target_endpoints:
+      - path: /profile
+        method: GET
+    auth_contexts:
+      primary: owner
+      forbidden: other
+    scope: caller
+    require_owner_canary_in_baseline: true
+    acceptable_status: [401, 403, 404]
+    leak_detection:
+      canaries: ["{{owner_first_name}}"]
+      min_unique_leaf_values: 2
+      ignore_fields: []
+    controls:
+      nonexistent_object: false
+      unauthenticated: false
+    confirm: 0
+
+  - id: dvr-bola-coupons-safe
+    name: Discount coupons must be caller-scoped
+    severity: high
+    owasp_category: API1:2023
+    cvss_score: 8.1
+    target_endpoints:
+      - path: /discount-coupons
+        method: GET
+    auth_contexts:
+      primary: owner
+      forbidden: other
+    scope: caller
+    require_owner_canary_in_baseline: true
+    acceptable_status: [401, 403, 404]
+    leak_detection:
+      canaries: ["{{owner_coupon_id}}"]
+      min_unique_leaf_values: 2
+      ignore_fields: []
+    controls:
+      nonexistent_object: false
+      unauthenticated: false
+    confirm: 0
+
+  - id: dvr-bfla-update-role
+    name: A Customer must not promote their own role
+    severity: critical
+    owasp_category: API5:2023
+    cvss_score: 9.1
+    target_endpoints:
+      - path: /users/update_role
+        method: PUT
+    auth_contexts:
+      primary: owner
+      forbidden: other
+    body:
+      username: "{{other_username}}"
+      role: "{{promoted_role}}"
+    mutating: true
+    acceptable_status: [401, 403, 404]
+    verify:
+      mode: state_diff
+      snapshot:
+        method: GET
+        path: /profile
+        auth: forbidden
+      fields: [role]
+    restore:
+      - method: PUT
+        path: /users/update_role
+        auth: forbidden
+        body:
+          username: "{{other_username}}"
+          role: "{{restored_role}}"
+    confirm: 1
+
+  - id: dvr-bfla-admin-stats-safe
+    name: Only Chef may read disk statistics
+    severity: high
+    owasp_category: API5:2023
+    cvss_score: 7.5
+    target_endpoints:
+      - path: /admin/stats/disk
+        method: GET
+    auth_contexts:
+      forbidden: owner
+    assertions:
+      - type: status_code
+        expected: 403
+
+  - id: dvr-mass-assignment-profile-patch
+    name: PATCH profile must not assign a role field
+    severity: critical
+    owasp_category: API6:2023
+    cvss_score: 9.1
+    target_endpoints:
+      - path: /profile
+        method: PATCH
+    auth_contexts:
+      primary: owner
+      forbidden: other
+    check: mass_assignment
+    request:
+      method: PATCH
+      path: /profile
+      auth: forbidden
+      body:
+        first_name: "{{other_first_name}}"
+        last_name: "{{other_last_name}}"
+        phone_number: "{{other_phone}}"
+    inject:
+      - name: role
+        type: string
+    readback:
+      request:
+        method: GET
+        path: /profile
+        auth: forbidden
+      paths: [role]
+    mutating: true
+    restore:
+      - method: PATCH
+        path: /profile
+        auth: forbidden
+        body:
+          role: "{{restored_role}}"
+
+  - id: dvr-mass-assignment-profile-put-safe
+    name: PUT profile must ignore an undeclared role field
+    severity: high
+    owasp_category: API6:2023
+    cvss_score: 7.5
+    target_endpoints:
+      - path: /profile
+        method: PUT
+    auth_contexts:
+      primary: owner
+      forbidden: other
+    check: mass_assignment
+    request:
+      method: PUT
+      path: /profile
+      auth: forbidden
+      body:
+        username: "{{other_username}}"
+        first_name: "{{other_first_name}}"
+        last_name: "{{other_last_name}}"
+        phone_number: "{{other_phone}}"
+    inject:
+      - name: role
+        type: string
+    readback:
+      request:
+        method: GET
+        path: /profile
+        auth: forbidden
+      paths: [role]
+    mutating: true
+    restore:
+      - method: PUT
+        path: /profile
+        auth: forbidden
+        body:
+          username: "{{other_username}}"
+          first_name: "{{other_first_name}}"
+          last_name: "{{other_last_name}}"
+          phone_number: "{{other_phone}}"

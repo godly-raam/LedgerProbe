@@ -1,0 +1,47 @@
+# DVR is built from the pinned source snapshot in benchmark/.out/dvr-source.
+# Only the API port is published, and only on loopback.
+name: ledgerprobe-dvr
+
+services:
+  web:
+    build:
+      context: ../../.out/dvr-source
+    image: ledgerprobe-dvr:d32d09972aec7830f5f1d4a5d274cac7aae7eb82
+    command: bash -c "alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8091 --workers 1"
+    ports:
+      - "127.0.0.1:8091:8091"
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: password
+      POSTGRES_SERVER: db
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: restaurant
+      JWT_SECRET_KEY: ledgerprobe-benchmark-only
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8091/healthcheck', timeout=2)"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+
+  db:
+    image: postgres:15.4-alpine
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: restaurant
+      PGDATA: /var/lib/postgresql/data/pgdata
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -d $$POSTGRES_DB -U $$POSTGRES_USER"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 5s
+    volumes:
+      - pg_volume:/var/lib/postgresql/data
+
+volumes:
+  pg_volume:
