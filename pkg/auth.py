@@ -351,7 +351,7 @@ def _identity(value, name: str):
         if not isinstance(params["scope"], str) or not params["scope"]:
             raise AuthError("invalid_auth_config", f"identity {name}.params.scope is invalid")
     elif provider == "login_request":
-        allowed = {"method", "path", "body", "token_json_path", "token_header",
+        allowed = {"method", "path", "body", "body_format", "token_json_path", "token_header",
                    "token_cookie", "expiry_json_path", "header_format"}
         _mapping(params, allowed, {"method", "path", "body"}, f"identity {name}.params")
         if params["method"] not in {"GET", "POST", "PUT", "PATCH"}:
@@ -360,6 +360,9 @@ def _identity(value, name: str):
             raise AuthError("invalid_auth_config", f"identity {name}.params.path is invalid")
         if not isinstance(params["body"], dict):
             raise AuthError("invalid_auth_config", f"identity {name}.params.body must be an object")
+        if params.get("body_format", "json") not in {"json", "form"}:
+            raise AuthError("invalid_auth_config",
+                            f"identity {name}.params.body_format must be json or form")
         extractors = [key for key in ("token_json_path", "token_header", "token_cookie")
                       if key in params]
         if len(extractors) != 1:
@@ -618,10 +621,12 @@ class AuthManager:
         self.attempts[name] += 1
         if self.attempts[name] > 3:
             raise AuthError("auth_failed", "authentication attempt limit reached")
+        payload_body = ({"data": body} if params.get("body_format", "json") == "form"
+                        else {"json": body})
         try:
             response = await self.client.request(
-                params["method"], url, json=body, headers={"Accept": "application/json"},
-                auth_flow=AUTH_FLOW,
+                params["method"], url, headers={"Accept": "application/json"},
+                auth_flow=AUTH_FLOW, **payload_body,
             )
         except httpx.HTTPError as exc:
             raise AuthError("auth_failed", f"login request failed ({type(exc).__name__})") from None
