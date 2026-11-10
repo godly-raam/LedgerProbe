@@ -8,12 +8,42 @@ maintainer chooses; no Git tags are required.
 
 ## [Unreleased]
 
+### Added
+
+- Baseline results now distinguish new failures, unchanged failures, explicit
+  pass resolutions, and unverified prior failures, and write `unverified` to
+  results JSON.
+- SARIF inconclusive review results now reference their rule metadata.
+- Skipped and blocked checks now carry allowlisted reasons in JSON, SARIF, and
+  JUnit reports.
+
 ### Changed
 
 - Installation documentation now uses pipx or a local virtual environment from
   GitHub, with Docker built locally from a clone.
 - The runtime JSON schemas are installed as package data so the CLI works
   outside the repository.
+- The GitHub Action writes reporting paths before running the scan and still
+  writes the step summary and uploads SARIF when the scan exits non-zero.
+- Every race synchronization mode applies the host allowlist before
+  opening a connection; burst mode preserves static query parameters.
+- Ticket lifecycle lines stay off stdout when JSON logging is enabled.
+- HAR and Postman imports reject non-object JSON with a clear input error.
+- Prometheus metrics now provide HELP and TYPE for every series.
+- The Docker image consolidates package upgrades into one layer.
+
+### Removed
+
+- Unreachable and untested DefectDojo upload code; the supported integration
+  remains the schema-tested JSON export.
+
+### Notes
+
+- No verdict logic changed in these fixes.
+
+### Known limitations
+
+- Checks still execute sequentially; concurrency remains deferred.
 
 ## [1.1.0] - 2026-11-07
 
