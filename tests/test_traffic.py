@@ -17,7 +17,7 @@ from pkg.integrations import (JiraTracker, LinearTracker, fingerprint_label,
                               load_integrations, process_tickets, target_slug)
 from pkg.rules import load_rules
 from pkg.traffic import (drift_report, import_har, import_postman, load_traffic_inventory,
-                         write_import)
+                         merge_traffic_inventory, write_import)
 from tests.fixtures.authz_server import SPEC_PATH, create_app
 
 
@@ -333,6 +333,31 @@ def test_spec_check_warn_accepts_traffic_inventory_route(tmp_path: Path):
         return GuardedClient(**kwargs)
     with patch.object(ledgerprobe, "GuardedClient", side_effect=client_factory):
         assert asyncio.run(ledgerprobe.execute(args)) == 0
+
+
+def test_merge_traffic_inventory_returns_the_mutated_inventory():
+    inventory = {"endpoints": [], "graph": []}
+    traffic = {"endpoints": [{"method": "GET", "path": "/traffic-only"}]}
+    result = merge_traffic_inventory(inventory, traffic)
+    assert result is inventory
+    assert result["endpoints"][0]["traffic_only"] is True
+
+
+@pytest.mark.parametrize("value", [[], "text", 3, None])
+@pytest.mark.parametrize("format", ["har", "postman"])
+def test_import_non_object_json_is_clean_value_error(tmp_path, format, value, capsys):
+    capture = tmp_path / f"capture.{format}"
+    capture.write_text(json.dumps(value))
+    importer = import_har if format == "har" else import_postman
+    with pytest.raises(ValueError, match="must be a JSON object"):
+        importer({"owner": capture}, ["api.example.test"])
+    code = ledgerprobe.main(["import", format, "--role", f"owner={capture}",
+                             "--include-host", "api.example.test",
+                             "--out", str(tmp_path / "out")])
+    assert code == 2
+    captured = capsys.readouterr()
+    assert "Traceback" not in captured.err
+    assert "import failed" in captured.err
 
 
 def config(tmp_path: Path, provider: str = "jira") -> object:

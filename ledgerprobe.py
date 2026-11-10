@@ -313,7 +313,7 @@ async def execute(args: argparse.Namespace) -> int:
             try:
                 ticket_run = await process_tickets(
                     results, config=config, target=inventory["base_url"], mode=args.tickets,
-                    ci_url=os.environ.get("CI_RUN_URL"),
+                    ci_url=os.environ.get("CI_RUN_URL"), emit=print,
                 )
             except TrackerError as exc:
                 ticket_run = None

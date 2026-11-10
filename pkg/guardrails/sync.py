@@ -314,16 +314,16 @@ async def _h2_round(client, requests: list[dict], allowed_hosts, timeout: float)
                 pass
 
 
-async def _burst_round(client, requests: list[dict], timeout: float) -> dict:
+async def _burst_round(client, requests: list[dict], allowed_hosts, timeout: float) -> dict:
     barrier = asyncio.Barrier(len(requests))
 
     async def send(item):
         await barrier.wait()
         stamp = monotonic_ns()
         request = _prepare(client, item)
+        if not _host_allowed(str(request.url), allowed_hosts):
+            raise UnsafeRequest("host is not allowed for synchronized traffic")
         kwargs = {"headers": dict(request.headers), "follow_redirects": False, "auth": None}
-        if "params" in item:
-            kwargs["params"] = item["params"]
         if "json" in item:
             kwargs["json"] = item["json"]
         try:
@@ -353,7 +353,7 @@ async def send_synchronized(client, requests, *, mode="last_byte", max_spread_ms
         timeout = 15.0
     client.check_kill()
     if mode == "burst":
-        result = await _burst_round(client, requests, timeout)
+        result = await _burst_round(client, requests, tuple(allowed_hosts), timeout)
     elif mode == "h2_single_packet":
         result = await _h2_round(client, requests, tuple(allowed_hosts), timeout)
     else:

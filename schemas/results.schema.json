@@ -49,6 +49,7 @@
         "new": {"type": "integer", "minimum": 0},
         "unchanged": {"type": "integer", "minimum": 0},
         "resolved": {"type": "integer", "minimum": 0},
+        "unverified": {"type": "integer", "minimum": 0},
         "suppressions_active": {"type": "integer", "minimum": 0},
         "suppressions_expired": {"type": "integer", "minimum": 0},
         "stale_suppressions": {"type": "integer", "minimum": 0}
@@ -106,7 +107,8 @@
       "properties": {
         "new": {"type": "integer", "minimum": 0},
         "unchanged": {"type": "integer", "minimum": 0},
-        "resolved": {"type": "integer", "minimum": 0}
+        "resolved": {"type": "integer", "minimum": 0},
+        "unverified": {"type": "integer", "minimum": 0}
       }
     }
   },
@@ -212,7 +214,7 @@
         "confidence": {"enum": ["high", "reduced"]},
         "severity": {"enum": ["info", "low", "medium", "high", "critical"]},
         "cwe": {"type": "integer", "minimum": 1},
-        "baseline_status": {"enum": ["new", "unchanged"]}
+        "baseline_status": {"enum": ["new", "unchanged", "resolved", "unverified"]}
       }
     },
     "finding": {
@@ -235,7 +237,7 @@
         "cwe": {"type": "integer", "minimum": 1},
         "cvss": {"$ref": "#/$defs/cvss"},
         "evidence": {"$ref": "#/$defs/evidence"},
-        "baseline_status": {"enum": ["new", "unchanged"]},
+        "baseline_status": {"enum": ["new", "unchanged", "resolved", "unverified"]},
         "suppression": {
           "type": "object",
           "additionalProperties": false,

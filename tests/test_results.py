@@ -8,7 +8,7 @@ from xml.etree import ElementTree as ET
 import jsonschema
 import pytest
 import httpx
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 from pkg.cvss import DEFAULT_VECTORS, score_vector
 from pkg.fingerprints import (
@@ -90,6 +90,7 @@ def test_fingerprint_stable_across_actual_object_values_and_hosts():
 
     async def run(base, value):
         client = AsyncMock()
+        client.check_kill = MagicMock()
         client.request.side_effect = [httpx.Response(200), httpx.Response(403)]
         result = (await run_rules({**inventory, "base_url": base}, [rule], client,
                                   {"owner": {"Authorization": "owner-token"},

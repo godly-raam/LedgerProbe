@@ -143,11 +143,7 @@ def test_bfla_fail_through_faketracker_create_and_comment(tmp_path):
     assert all(sentinel not in text for sentinel in SENTINELS for text in surfaces)
 
 
-@pytest.mark.parametrize("host,port,object_id,token", [
-    ("alpha.test", 443, "obj-a", "token-a"),
-    ("beta.test", 8443, "obj-b", "token-b"),
-])
-def test_bfla_fingerprint_stable_across_runtime_values(host, port, object_id, token, tmp_path):
+def _bfla_fingerprint(host, port, object_id, token, tmp_path):
     rule = load_rules([Path("tests/fixtures/authz_server/rules_bfla_read.yaml")])[0]
     rule = {**rule, "target_endpoints": [{"path": "/api/v1/objects/{id}", "method": "GET"}],
             "parameters": {"path": {"id": "{{id}}"}},
@@ -185,5 +181,5 @@ def test_bfla_fingerprint_stable_across_runtime_values(host, port, object_id, to
 def test_bfla_fingerprint_is_stable_between_runs(tmp_path):
     values = [(host, port, object_id, token) for host, port, object_id, token in [
         ("alpha.test", 443, "obj-a", "token-a"), ("beta.test", 8443, "obj-b", "token-b")]]
-    fingerprints = [test_bfla_fingerprint_stable_across_runtime_values(*value, tmp_path) for value in values]
+    fingerprints = [_bfla_fingerprint(*value, tmp_path) for value in values]
     assert fingerprints[0] == fingerprints[1]

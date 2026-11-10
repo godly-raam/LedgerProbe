@@ -32,10 +32,16 @@ def test_metrics_and_summary_are_metadata_only():
         {"status": "failed", "verdict": "FAIL"},
         {"status": "inconclusive", "verdict": "INCONCLUSIVE"},
     ]
-    text = metrics_text(results, duration_seconds=1.25, tracker_errors=2, auth_errors=1)
+    text = metrics_text(results, duration_seconds=1.25, tracker_errors=2)
     assert 'ledgerprobe_verdict_count{verdict="FAIL"} 1' in text
     assert "ledgerprobe_inconclusive_ratio 0.5" in text
     assert "ledgerprobe_tracker_errors_total 2" in text
+    help_names = {line.split()[2] for line in text.splitlines() if line.startswith("# HELP ")}
+    type_names = {line.split()[2] for line in text.splitlines() if line.startswith("# TYPE ")}
+    metric_names = {line.split(" ", 1)[0].split("{", 1)[0] for line in text.splitlines()
+                    if line and not line.startswith("#")}
+    assert metric_names <= help_names
+    assert metric_names <= type_names
     summary = github_summary({"summary": {"checks": 2, "failed": 1},
                               "findings": [{"rule_id": "ownership", "fingerprint": "lp1:" + "b" * 64,
                                             "status": "failed", "evidence": {"id": "EXPANDED-SECRET"}}]})

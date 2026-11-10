@@ -84,6 +84,16 @@ def _json(value: Any) -> Any:
     return value
 
 
+def _json_object(path: Path, label: str) -> dict:
+    try:
+        document = json.loads(Path(path).read_text(encoding="utf-8"))
+    except ValueError:
+        raise ValueError(f"{label} capture must be valid JSON") from None
+    if not isinstance(document, dict):
+        raise ValueError(f"{label} capture must be a JSON object")
+    return document
+
+
 def _schema(value: Any) -> dict:
     if value is None:
         return {"type": "null"}
@@ -483,7 +493,7 @@ def import_har(roles: dict[str, Path], include_hosts: Iterable[str], source: str
     allowed = _hosts(include_hosts)
     observations = []
     for role, path in roles.items():
-        document = json.loads(Path(path).read_text(encoding="utf-8"))
+        document = _json_object(path, "HAR")
         entries = document.get("log", {}).get("entries")
         if document.get("log", {}).get("version") != "1.2" or not isinstance(entries, list):
             raise ValueError("HAR must be version 1.2 with a log.entries list")
@@ -546,7 +556,7 @@ def import_postman(roles: dict[str, Path], include_hosts: Iterable[str], source:
     allowed = _hosts(include_hosts)
     observations = []
     for role, path in roles.items():
-        document = json.loads(Path(path).read_text(encoding="utf-8"))
+        document = _json_object(path, "Postman")
         if not isinstance(document.get("info"), dict) or "2.1.0" not in str(document["info"].get("schema", "")):
             raise ValueError("Postman collection must be v2.1.0")
         def walk(items):

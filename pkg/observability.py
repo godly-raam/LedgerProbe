@@ -32,7 +32,7 @@ def log_event(run_id, event, *, target, tool_version, result=None, stream=None,
     return record
 
 
-def metrics_text(results, *, duration_seconds, tracker_errors=0, auth_errors=0):
+def metrics_text(results, *, duration_seconds, tracker_errors=0):
     verdicts = Counter(result.get("verdict", "UNKNOWN") for result in results)
     inconclusive = sum(result.get("status") == "inconclusive" for result in results)
     lines = ["# HELP ledgerprobe_verdict_count Findings by verdict.",
@@ -42,7 +42,11 @@ def metrics_text(results, *, duration_seconds, tracker_errors=0, auth_errors=0):
     lines += ["# HELP ledgerprobe_inconclusive_ratio Ratio of inconclusive checks.",
               "# TYPE ledgerprobe_inconclusive_ratio gauge",
               f"ledgerprobe_inconclusive_ratio {inconclusive / max(1, len(results))}",
+              "# HELP ledgerprobe_run_duration_seconds Scan duration in seconds.",
+              "# TYPE ledgerprobe_run_duration_seconds gauge",
               f"ledgerprobe_run_duration_seconds {float(duration_seconds)}",
+              "# HELP ledgerprobe_tracker_errors_total Tracker errors in this run.",
+              "# TYPE ledgerprobe_tracker_errors_total counter",
               f"ledgerprobe_tracker_errors_total {int(tracker_errors)}"]
     return "\n".join(lines) + "\n"
 

@@ -3,7 +3,7 @@
 import json
 from pathlib import Path
 
-from ._evidence import result_properties
+from ._evidence import _REASONS, result_properties
 from ..fingerprints import result_fingerprint
 
 
@@ -31,23 +31,6 @@ def write_sarif(results, path, *, source_uri=None, warnings=()) -> Path:
                 "message": {"text": f"spec_drift: {result['spec_drift']} is absent from the spec"},
                 "properties": {"spec_drift": result["spec_drift"]},
             })
-        if result["status"] == "inconclusive":
-            inconclusive_location: dict[str, object] = {"logicalLocations": [{
-                "fullyQualifiedName": result["method"] + " " + result["path"],
-            }]}
-            if source_uri is not None:
-                inconclusive_location["physicalLocation"] = {"artifactLocation": {"uri": str(source_uri)}}
-            findings.append({
-                "level": "note",
-                "message": {"text": result.get("message") or result["name"]},
-                "locations": [inconclusive_location],
-                "partialFingerprints": {
-                    "ledgerprobe/v1": result_fingerprint(result),
-                },
-                "kind": "review",
-                "properties": {"status": "inconclusive", "tags": ["inconclusive"], **result_properties(result)},
-            })
-            continue
         rule_id = result["rule_id"]
         if rule_id not in indexes:
             indexes[rule_id] = len(rules)
@@ -62,6 +45,25 @@ def write_sarif(results, path, *, source_uri=None, warnings=()) -> Path:
                     "tags": ["security", "owasp", "owasp/" + result["owasp_category"]],
                 },
             })
+        if result["status"] == "inconclusive":
+            inconclusive_location: dict[str, object] = {"logicalLocations": [{
+                "fullyQualifiedName": result["method"] + " " + result["path"],
+            }]}
+            if source_uri is not None:
+                inconclusive_location["physicalLocation"] = {"artifactLocation": {"uri": str(source_uri)}}
+            findings.append({
+                "level": "note",
+                "ruleId": rule_id,
+                "ruleIndex": indexes[rule_id],
+                "message": {"text": result.get("message") or result["name"]},
+                "locations": [inconclusive_location],
+                "partialFingerprints": {
+                    "ledgerprobe/v1": result_fingerprint(result),
+                },
+                "kind": "review",
+                "properties": {"status": "inconclusive", "tags": ["inconclusive"], **result_properties(result)},
+            })
+            continue
         reference = {"id": rule_id, "index": indexes[rule_id]}
         if result["status"] == "error":
             execution_failed = True
@@ -100,6 +102,13 @@ def write_sarif(results, path, *, source_uri=None, warnings=()) -> Path:
             if properties := result_properties(result):
                 finding["properties"] = properties
             findings.append(finding)
+        elif result["status"] == "skipped" and result.get("reason") in _REASONS:
+            notifications.append({
+                "associatedRule": reference,
+                "level": "note",
+                "message": {"text": result.get("message") or result["name"]},
+                "properties": result_properties(result),
+            })
     report = {
         "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
         "version": "2.1.0",

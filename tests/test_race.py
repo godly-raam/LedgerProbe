@@ -16,6 +16,9 @@ import yaml
 
 import ledgerprobe
 from pkg.rules.verdict import evaluate_race
+from pkg.guardrails import GuardedClient, UnsafeRequest
+from pkg.guardrails import sync as sync_module
+from pkg.guardrails.sync import send_synchronized
 
 FIXTURES = Path(__file__).parent / "fixtures" / "race_server"
 EXPECTATIONS = yaml.safe_load((FIXTURES / "expectations.yaml").read_text(encoding="utf-8"))
@@ -129,6 +132,45 @@ def test_race_report_has_no_marker_or_balance_values(tmp_path: Path):
     text = (tmp_path / "results.sarif").read_text() + (tmp_path / "results.xml").read_text()
     for secret in ("balance", "7391528", "token-owner", "token-other", "race-canary"):
         assert secret not in text
+
+
+@pytest.mark.parametrize("mode", ["last_byte", "h2_single_packet", "burst"])
+def test_every_sync_mode_rejects_non_allowlisted_host_before_opening(mode):
+    opened = []
+
+    def handler(request):
+        opened.append(request)
+        raise AssertionError("transport must not be reached")
+
+    async def no_connection(*args, **kwargs):
+        opened.append("socket")
+        raise AssertionError("socket must not be opened")
+
+    client = GuardedClient(transport=httpx.MockTransport(handler))
+    request = {"method": "POST", "url": "https://evil.test/race", "json": {"amount": 1}}
+    with patch.object(sync_module.asyncio, "open_connection", no_connection):
+        with pytest.raises(UnsafeRequest):
+            asyncio.run(send_synchronized(
+                client, [request], mode=mode, allowed_hosts=("allowed.test",)))
+    assert opened == []
+
+
+def test_burst_preserves_static_query_parameters_without_duplicate_params():
+    seen = []
+
+    async def request(method, url, **kwargs):
+        seen.append((str(url), kwargs))
+        return httpx.Response(200, request=httpx.Request(method, url))
+
+    client = GuardedClient(transport=httpx.MockTransport(lambda request: httpx.Response(200)))
+    client.request = request
+    request_value = {"method": "POST", "url": "http://127.0.0.1/race?fixed=1",
+                     "params": {"fixed": "1"}, "json": {"amount": 1}}
+    result = asyncio.run(send_synchronized(client, [request_value], mode="burst",
+                                           allowed_hosts=("127.0.0.1",)))
+    assert result["responses"][0]["status"] == 200
+    assert seen[0][0].endswith("/race?fixed=1")
+    assert "params" not in seen[0][1]
 
 
 async def _run_direct(port: int, rule_file: str, tmp_path: Path):

@@ -62,7 +62,7 @@ def _record(result: dict, *, status: str | None = None) -> dict:
                 key: suppression[key] for key in ("owner", "reason", "expires")
                 if isinstance(suppression.get(key), str)
             }
-    if result.get("baseline_status") in {"new", "unchanged"}:
+    if result.get("baseline_status") in {"new", "unchanged", "resolved", "unverified"}:
         record["baseline_status"] = result["baseline_status"]
     return record
 
@@ -111,11 +111,13 @@ def build_document(results, *, target: str, modes: dict, warnings=(), baseline=N
         "warnings": [_warning(item) for item in warnings if isinstance(item, dict) and item.get("code")],
     }
     if baseline is not None:
-        document["summary"].update({key: baseline.get(key, 0) for key in ("new", "unchanged", "resolved")})
+        document["summary"].update({key: baseline.get(key, 0)
+                                    for key in ("new", "unchanged", "resolved", "unverified")})
         document["baseline"] = {
             "new": baseline.get("new", 0),
             "unchanged": baseline.get("unchanged", 0),
             "resolved": baseline.get("resolved", 0),
+            "unverified": baseline.get("unverified", 0),
         }
     if suppressions is not None:
         document["summary"].update({
@@ -151,43 +153,78 @@ def baseline_document(path) -> dict:
     return load_document(path)
 
 
-def apply_baseline(results, document: dict):
+def _prior_failures(document: dict) -> dict:
+    """Return fingerprint -> rule_id for unsuppressed FAIL findings only."""
     prior = {}
     for finding in document.get("findings", []):
-        if isinstance(finding, dict) and isinstance(finding.get("fingerprint"), str):
-            prior[finding["fingerprint"]] = finding.get("rule_id")
+        if not isinstance(finding, dict) or not isinstance(finding.get("fingerprint"), str):
+            continue
+        if finding.get("verdict") not in {None, "FAIL"} or finding.get("status") == "suppressed":
+            continue
+        prior[finding["fingerprint"]] = finding.get("rule_id")
+    return prior
+
+
+def _classify(prior: dict, current: list[dict]) -> tuple[list[str | None], dict[str, list[dict]]]:
+    """Shared baseline classification for apply_baseline and diff_documents."""
+    statuses: list[str | None] = []
+    rows = {"new": [], "unchanged": [], "resolved": [], "unverified": []}
+    observed = set()
+    for item in current:
+        fingerprint = item["fingerprint"]
+        observed.add(fingerprint)
+        verdict = item.get("verdict") or "FAIL"
+        suppressed = item.get("status") == "suppressed"
+        if verdict == "FAIL" and not suppressed:
+            status = "unchanged" if fingerprint in prior else "new"
+        elif verdict == "FAIL" and suppressed and fingerprint in prior:
+            status = "unchanged"
+        elif verdict == "PASS" and fingerprint in prior:
+            status = "resolved"
+        elif fingerprint in prior:
+            status = "unverified"
+        else:
+            status = None
+        statuses.append(status)
+        if status:
+            rows[status].append({"fingerprint": fingerprint,
+                                 "rule_id": item.get("rule_id") or prior.get(fingerprint)})
+    for fingerprint, rule_id in prior.items():
+        if fingerprint not in observed:
+            rows["unverified"].append({"fingerprint": fingerprint, "rule_id": rule_id})
+    for key in rows:
+        rows[key].sort(key=lambda row: row["fingerprint"])
+    return statuses, rows
+
+
+def apply_baseline(results, document: dict):
+    prior = _prior_failures(document)
+    results = list(results)
     current = []
-    seen = set()
-    new = unchanged = 0
     for result in results:
         copied = copy.deepcopy(result)
-        fingerprint = result_fingerprint(copied)
-        seen.add(fingerprint)
-        if fingerprint in prior:
-            copied["baseline_status"] = "unchanged"
-            unchanged += 1
-        else:
-            copied["baseline_status"] = "new"
-            new += 1
-        current.append(copied)
-    resolved = [{"fingerprint": fingerprint, "rule_id": rule_id}
-                for fingerprint, rule_id in prior.items() if fingerprint not in seen]
-    return current, {"new": new, "unchanged": unchanged, "resolved": len(resolved)}
+        current.append({"fingerprint": result_fingerprint(copied),
+                        "rule_id": copied.get("rule_id"),
+                        "verdict": copied.get("verdict"),
+                        "status": copied.get("status"), "result": copied})
+    statuses, rows = _classify(prior, current)
+    output = []
+    for item, status in zip(current, statuses):
+        copied = item["result"]
+        if status:
+            copied["baseline_status"] = status
+        output.append(copied)
+    return output, {key: len(rows[key]) for key in ("new", "unchanged", "resolved", "unverified")}
 
 
 def diff_documents(old: dict, new: dict) -> dict:
-    old_map = {item["fingerprint"]: item.get("rule_id") for item in old.get("findings", [])
-               if isinstance(item, dict) and isinstance(item.get("fingerprint"), str)}
-    new_map = {item["fingerprint"]: item.get("rule_id") for item in new.get("findings", [])
-               if isinstance(item, dict) and isinstance(item.get("fingerprint"), str)}
-    def rows(mapping, selected):
-        return [{"fingerprint": fingerprint, "rule_id": mapping[fingerprint]}
-                for fingerprint in sorted(selected)]
-    return {
-        "new": rows(new_map, set(new_map) - set(old_map)),
-        "resolved": rows(old_map, set(old_map) - set(new_map)),
-        "unchanged": rows(new_map, set(new_map) & set(old_map)),
-    }
+    prior = _prior_failures(old)
+    current = []
+    for item in new.get("findings", []) + new.get("skipped", []) + new.get("errors", []):
+        if isinstance(item, dict) and isinstance(item.get("fingerprint"), str):
+            current.append(item)
+    _, rows = _classify(prior, current)
+    return rows
 
 
 def gate_exit(results, *, fail_on="any", fail_on_inconclusive=False,

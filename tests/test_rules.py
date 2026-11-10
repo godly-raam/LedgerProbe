@@ -7,7 +7,7 @@ import json
 import unittest
 from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import yaml
@@ -132,6 +132,7 @@ class LoadRulesTests(unittest.TestCase):
 class RunRulesTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.client = AsyncMock()
+        self.client.check_kill = MagicMock()
         self.client.request.side_effect = [response(200), response(403)]
 
     async def run_rule(self, selected=None, inv=None, variables=None, contexts=None):

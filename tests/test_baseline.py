@@ -19,7 +19,10 @@ def _result(rule_id="ownership", method="GET", path="/objects/{id}", status="fai
                      identity_roles=["owner", "other"], check_type="bola")
     return {"rule_id": rule_id, "method": method, "path": path, "path_template": path,
             "check_type": "bola", "identity_roles": ["owner", "other"],
-            "fingerprint": fp, "status": status, "verdict": "FAIL" if status == "failed" else "PASS",
+            "fingerprint": fp, "status": status,
+            "verdict": {"failed": "FAIL", "suppressed": "FAIL", "passed": "PASS",
+                        "inconclusive": "INCONCLUSIVE", "error": "ERROR",
+                        "skipped": "SKIPPED"}[status],
             "severity": "high", "confidence": "high",
             "cvss": score_vector(DEFAULT_VECTORS["bola"]), "evidence": {"overlap_count": 2}}
 
@@ -34,19 +37,47 @@ def test_new_unchanged_resolved_and_gate_matrix(tmp_path):
     old = _document([old_result])
     new_result = _result(rule_id="new-rule")
     current, stats = apply_baseline([new_result], old)
-    assert stats == {"new": 1, "unchanged": 0, "resolved": 1}
+    assert stats == {"new": 1, "unchanged": 0, "resolved": 0, "unverified": 1}
     assert current[0]["baseline_status"] == "new"
     assert gate_exit(current, fail_on="new") == 1
     assert gate_exit(current, fail_on="any") == 1
     assert gate_exit(current, fail_on="none") == 0
     current, stats = apply_baseline([old_result], old)
-    assert stats == {"new": 0, "unchanged": 1, "resolved": 0}
+    assert stats == {"new": 0, "unchanged": 1, "resolved": 0, "unverified": 0}
     assert current[0]["baseline_status"] == "unchanged"
     assert gate_exit(current, fail_on="new") == 0
     diff = diff_documents(old, _document([new_result]))
     assert [item["rule_id"] for item in diff["new"]] == ["new-rule"]
-    assert [item["rule_id"] for item in diff["resolved"]] == ["ownership"]
+    assert diff["resolved"] == []
+    assert [item["rule_id"] for item in diff["unverified"]] == ["ownership"]
     assert diff["unchanged"] == []
+
+
+def test_baseline_only_new_unsuppressed_failures_and_unverified_absences():
+    old = _document([_result()])
+    passed = _result(status="passed")
+    current, stats = apply_baseline([passed], old)
+    assert stats == {"new": 0, "unchanged": 0, "resolved": 1, "unverified": 0}
+    assert current[0]["baseline_status"] == "resolved"
+    assert gate_exit(current, fail_on="new") == 0
+
+    absent_pass = _result(rule_id="not-in-baseline", status="passed")
+    current, stats = apply_baseline([absent_pass], old)
+    assert stats == {"new": 0, "unchanged": 0, "resolved": 0, "unverified": 1}
+    assert "baseline_status" not in current[0]
+
+    inconclusive = _result(status="inconclusive")
+    current, stats = apply_baseline([inconclusive], old)
+    assert stats == {"new": 0, "unchanged": 0, "resolved": 0, "unverified": 1}
+    assert current[0]["baseline_status"] == "unverified"
+
+    suppressed = _result(status="suppressed")
+    current, stats = apply_baseline([suppressed], old)
+    assert stats == {"new": 0, "unchanged": 1, "resolved": 0, "unverified": 0}
+    assert current[0]["baseline_status"] == "unchanged"
+    current, stats = apply_baseline([_result(rule_id="suppressed-new", status="suppressed")], old)
+    assert stats == {"new": 0, "unchanged": 0, "resolved": 0, "unverified": 1}
+    assert "baseline_status" not in current[0]
 
 
 def test_suppressed_and_error_statuses_do_not_fail_the_gate():

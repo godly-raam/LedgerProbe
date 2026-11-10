@@ -2,12 +2,11 @@
 from __future__ import annotations
 
 import json
-import tempfile
 from datetime import datetime, timezone
 from importlib.resources import files
 from pathlib import Path
 
-from .auth import SecretResolver, redact
+from .auth import redact
 from .cwe import cwe_for
 from .fingerprints import result_fingerprint
 
@@ -59,24 +58,3 @@ def write_export(results, path, *, target):
     path = Path(path)
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=True, allow_nan=False) + "\n", encoding="utf-8")
     return path
-
-
-async def upload(client, results, *, endpoint, token_ref, engagement, product,
-                 close_old_findings=False, target, transport=None):
-    token = await SecretResolver(transport=transport).resolve(token_ref)
-    payload = build_export(results, target=target)
-    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as handle:
-        json.dump(payload, handle)
-        name = handle.name
-    try:
-        with open(name, "rb") as handle:
-            return await client.request(
-                "POST", endpoint.rstrip("/") + "/api/v2/import-scan/",
-                headers={"Authorization": "Token " + token.reveal()},
-                data={"scan_type": "Generic Findings Import", "engagement": engagement,
-                      "product_name": product,
-                      "close_old_findings": str(close_old_findings).lower()},
-                files={"file": ("findings.json", handle, "application/json")},
-            )
-    finally:
-        Path(name).unlink(missing_ok=True)

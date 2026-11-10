@@ -144,7 +144,7 @@ def test_inconclusive_exit_policy_and_report_mapping(tmp_path, strict, exit_code
     note = sarif["runs"][0]["results"][0]
     assert note["level"] == "note" and note["kind"] == "review"
     assert note["properties"]["reason"] == "ambiguous_2xx"
-    assert "security-severity" not in json.dumps(sarif)
+    assert "security-severity" not in json.dumps(note)
     assert "object-a" not in json.dumps(sarif)
 
 
@@ -239,3 +239,19 @@ def test_tracker_error_exit_three_after_reports(tmp_path):
     assert code == 3
     assert (tmp_path / "results.sarif").exists()
     assert sarif["runs"][0]["results"]
+
+
+def test_json_logs_keep_ticket_lifecycle_off_stdout(tmp_path, capsys):
+    integrations = tmp_path / "integrations.yaml"
+    integrations.write_text(json.dumps({
+        "schema_version": "ledgerprobe-integrations/1",
+        "tracker": {"provider": "jira", "base_url": "https://jira.test",
+                    "project": "SEC", "token_env": "LP_TOKEN", "target_label": "test"},
+    }))
+    code, _, _ = scan(tmp_path, lambda request: httpx.Response(200, json={"id": "object-1"}),
+                      extra=("--integrations", str(integrations), "--tickets", "dry-run",
+                             "--log-format", "json"))
+    assert code == 1
+    lines = [line for line in capsys.readouterr().out.splitlines() if line]
+    assert lines
+    assert all(line.startswith("{") and json.loads(line) for line in lines)

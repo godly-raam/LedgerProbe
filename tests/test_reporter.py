@@ -1,6 +1,7 @@
 """Reporter tests use local files and MockTransport only; no live webhooks."""
 
 import asyncio
+import ast
 import copy
 import inspect
 import json
@@ -9,10 +10,15 @@ from xml.etree import ElementTree as ET
 
 import httpx
 import pytest
+import jsonschema
 
 from pkg.guardrails import GuardedClient
 from pkg.reporter import notify, write_junit, write_sarif
 from pkg.reporter.sarif import write_sarif as sarif_writer
+from pkg.reporter._evidence import _REASONS
+from pkg.results import build_document
+
+SARIF_SCHEMA = json.loads((Path(__file__).parents[1] / ".demo" / "sarif-schema.json").read_text())
 
 
 def result(**changes):
@@ -107,11 +113,14 @@ def test_sarif_inconclusive_is_a_non_security_note(tmp_path):
     write_sarif([result(status="inconclusive", message="Authorization could not be determined",
                         reason="Prerequisite data was unavailable")], path)
     run = json.loads(path.read_text())["runs"][0]
-    assert run["tool"]["driver"]["rules"] == []
+    jsonschema.Draft7Validator(SARIF_SCHEMA).validate(json.loads(path.read_text()))
+    assert run["tool"]["driver"]["rules"][0]["id"] == "ownership"
     assert run["invocations"] == [{"executionSuccessful": True, "toolExecutionNotifications": []}]
     assert run["results"] == [{
         "level": "note",
         "kind": "review",
+        "ruleId": "ownership",
+        "ruleIndex": 0,
         "message": {"text": "Authorization could not be determined"},
         "locations": [{"logicalLocations": [{"fullyQualifiedName": "GET /items/{id}"}]}],
         "partialFingerprints": {"ledgerprobe/v1": run["results"][0]["partialFingerprints"]["ledgerprobe/v1"]},
@@ -127,6 +136,58 @@ def test_sarif_error_is_not_security_finding_and_empty_messages_are_valid(tmp_pa
     assert run["invocations"][0]["toolExecutionNotifications"][0]["message"]["text"]
     write_sarif([result(message="")], path)
     assert json.loads(path.read_text())["runs"][0]["results"][0]["message"]["text"]
+
+
+def _engine_reasons():
+    reasons = set()
+    paths = list((Path(__file__).parents[1] / "pkg" / "rules").rglob("*.py"))
+    paths.append(Path(__file__).parents[1] / "pkg" / "auth.py")
+    for path in paths:
+        tree = ast.parse(path.read_text())
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call):
+                for keyword in node.keywords:
+                    if (keyword.arg == "reason" and isinstance(keyword.value, ast.Constant)
+                            and isinstance(keyword.value.value, str)):
+                        reasons.add(keyword.value.value)
+                name = (node.func.id if isinstance(node.func, ast.Name)
+                        else node.func.attr if isinstance(node.func, ast.Attribute) else "")
+                if name == "_Stop":
+                    reasons.update(arg.value for arg in node.args[1:]
+                                   if isinstance(arg, ast.Constant) and isinstance(arg.value, str))
+                if name == "AuthError" and node.args and isinstance(node.args[0], ast.Constant):
+                    if isinstance(node.args[0].value, str):
+                        reasons.add(node.args[0].value)
+            if isinstance(node, ast.Assign):
+                if any(isinstance(target, ast.Name) and target.id == "reason"
+                       for target in node.targets):
+                    reasons.update(value.value for value in ast.walk(node.value)
+                                   if isinstance(value, ast.Constant) and isinstance(value.value, str))
+            if isinstance(node, ast.Dict):
+                for key, value in zip(node.keys, node.values):
+                    if (isinstance(key, ast.Constant) and key.value == "reason"
+                            and isinstance(value, ast.Constant) and isinstance(value.value, str)):
+                        reasons.add(value.value)
+    return reasons - {"error", "inconclusive", "skipped"}
+
+
+def test_every_engine_reason_is_allowlisted():
+    assert _engine_reasons() - _REASONS == set()
+
+
+@pytest.mark.parametrize("reason", ["kill_switch", "mutation_blocked_production", "rule_disabled"])
+def test_skipped_reason_reaches_json_sarif_and_junit(tmp_path, reason):
+    row = result(status="skipped", verdict="SKIPPED", reason=reason)
+    sarif_path, junit_path = tmp_path / "result.sarif", tmp_path / "result.xml"
+    write_sarif([row], sarif_path)
+    write_junit([row], junit_path)
+    jsonschema.Draft7Validator(SARIF_SCHEMA).validate(json.loads(sarif_path.read_text()))
+    document = build_document([row], target="https://target.test",
+                              modes={"read_only": True}, timestamp="2026-11-03T00:00:00+00:00")
+    assert document["skipped"][0]["reason"] == reason
+    notification = json.loads(sarif_path.read_text())["runs"][0]["invocations"][0]["toolExecutionNotifications"][0]
+    assert notification["properties"]["reason"] == reason
+    assert ET.parse(junit_path).find(".//property[@name='ledgerprobe.reason']").get("value") == reason
 
 
 @pytest.mark.parametrize("source_uri", ["examples/bank.openapi.yaml", Path("examples/bank.openapi.yaml")])

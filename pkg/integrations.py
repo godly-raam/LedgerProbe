@@ -1058,10 +1058,11 @@ async def _slack_send(config: IntegrationsConfig, text: str, *, transport=None,
 async def process_tickets(results: list[dict], *, config: IntegrationsConfig, target: str,
                           mode: str = "dry-run", tracker: Tracker | None = None,
                           transport=None, sleep=None, now: datetime | None = None,
-                          ci_url: str | None = None, slack_transport=None) -> TicketRun:
+                          ci_url: str | None = None, slack_transport=None, emit=None) -> TicketRun:
     """Plan and optionally execute lifecycle actions; never part of scan verdicts."""
     if mode not in {"dry-run", "plan", "apply"}:
         raise ValueError("ticket mode must be dry-run, plan or apply")
+    emit = emit or print
     now = now or datetime.now(timezone.utc)
     run = TicketRun()
     owns_tracker = tracker is None and mode in {"plan", "apply"}
@@ -1099,7 +1100,7 @@ async def process_tickets(results: list[dict], *, config: IntegrationsConfig, ta
                 expires = (result.get("suppression") or {}).get("expires", "unknown")
                 if ticket and ticket.open and not _suppressed_comment(ticket, expires):
                     text = f"ledgerprobe-suppressed: until {expires}"
-                    await _execute_comment(tracker, ticket, text, mode, run, result, fp, target_label)
+                    await _execute_comment(tracker, ticket, text, mode, run, result, fp, target_label, emit=emit)
                 continue
             if status == "failed" and result.get("verdict") == "FAIL":
                 ticket = existing.get(fp)
@@ -1114,13 +1115,13 @@ async def process_tickets(results: list[dict], *, config: IntegrationsConfig, ta
                         run.errors.append(str(exc))
                         continue
                     text = f"ledgerprobe-regression: finding failed again\n{state_line(finding_metadata(result))}"
-                    await _execute_comment(tracker, ticket, text, mode, run, result, fp, target_label)
+                    await _execute_comment(tracker, ticket, text, mode, run, result, fp, target_label, emit=emit)
                     run.counts["regressed"] += 1
                     continue
                 change = _material_change(ticket, result)
                 if change and not _comment_recent(ticket, now, config.tracker.comment_cooldown_days):
                     text = f"ledgerprobe-material-change: {change}\n{state_line(finding_metadata(result))}"
-                    await _execute_comment(tracker, ticket, text, mode, run, result, fp, target_label)
+                    await _execute_comment(tracker, ticket, text, mode, run, result, fp, target_label, emit=emit)
                 else:
                     run.actions.append({"kind": "noop", "fingerprint": fp,
                                         "rule_id": result.get("rule_id"), "ticket": ticket.key})
@@ -1130,7 +1131,7 @@ async def process_tickets(results: list[dict], *, config: IntegrationsConfig, ta
                 if ticket and ticket.open and result.get("verdict") == "PASS":
                     marker = f"ledgerprobe-retest-passed: run {now.isoformat()}"
                     await _execute_comment(tracker, ticket, marker, mode, run, result, fp,
-                                           target_label, dedupe_marker=True)
+                                           target_label, dedupe_marker=True, emit=emit)
                     try:
                         if mode == "apply":
                             await tracker.add_label(ticket, "lp-retest-passed")
@@ -1209,17 +1210,17 @@ async def process_tickets(results: list[dict], *, config: IntegrationsConfig, ta
                 run.errors.append(str(exc))
         for action in run.actions:
             if action["kind"] == "create":
-                print(f"[tickets] create {action['fingerprint']} {action.get('rule_id')}")
+                emit(f"[tickets] create {action['fingerprint']} {action.get('rule_id')}")
             elif action["kind"] == "summary":
-                print("[tickets] create-summary rule=flood-summary")
+                emit("[tickets] create-summary rule=flood-summary")
             elif action["kind"] == "comment":
-                print(f"[tickets] comment {action['fingerprint']} {action.get('rule_id')} ticket={action['ticket']}")
+                emit(f"[tickets] comment {action['fingerprint']} {action.get('rule_id')} ticket={action['ticket']}")
             elif action["kind"] == "reopen":
-                print(f"[tickets] reopen {action['fingerprint']} {action.get('rule_id')} ticket={action['ticket']}")
+                emit(f"[tickets] reopen {action['fingerprint']} {action.get('rule_id')} ticket={action['ticket']}")
             elif action["kind"] == "resolve":
-                print(f"[tickets] resolve {action['fingerprint']} {action.get('rule_id')} ticket={action['ticket']}")
+                emit(f"[tickets] resolve {action['fingerprint']} {action.get('rule_id')} ticket={action['ticket']}")
             elif action["kind"] == "noop":
-                print(f"[tickets] noop {action['fingerprint']} {action.get('rule_id')} ticket={action['ticket']}")
+                emit(f"[tickets] noop {action['fingerprint']} {action.get('rule_id')} ticket={action['ticket']}")
         run.slack_text = _digest_text(run, ci_url)
         if mode == "apply":
             try:
@@ -1227,7 +1228,7 @@ async def process_tickets(results: list[dict], *, config: IntegrationsConfig, ta
             except TrackerError as exc:
                 run.errors.append(str(exc))
         elif config.slack.webhook_url_env:
-            print("[tickets] dry-run slack digest planned (network disabled)")
+            emit("[tickets] dry-run slack digest planned (network disabled)")
         return run
     finally:
         if owns_tracker and tracker is not None:
@@ -1236,7 +1237,8 @@ async def process_tickets(results: list[dict], *, config: IntegrationsConfig, ta
 
 async def _execute_comment(tracker: Tracker, ticket: Ticket, text: str, mode: str, run: TicketRun,
                            result: dict, fingerprint: str, target: str,
-                           dedupe_marker: bool = False) -> None:
+                           dedupe_marker: bool = False, emit=None) -> None:
+    emit = emit or print
     if dedupe_marker and any(text in comment.body for comment in ticket.comments):
         return
     try:
@@ -1247,7 +1249,7 @@ async def _execute_comment(tracker: Tracker, ticket: Ticket, text: str, mode: st
             if state:
                 ticket.metadata = state
         elif mode == "plan":
-            print("[tickets] plan mode: read-only tracker lookups; no writes")
+            emit("[tickets] plan mode: read-only tracker lookups; no writes")
         else:
             ticket.metadata = old
         run.actions.append({"kind": "comment", "fingerprint": fingerprint,

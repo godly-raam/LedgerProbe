@@ -7,7 +7,13 @@ _REASONS = {"unauthenticated_leak", "leak_detected", "assertion_failed", "baseli
             "safety_blocked", "endpoint_absent", "invalid_control", "control_unusable",
             "mutation_blocked", "state_changed_by_other", "unverified_mutation",
             "verify_unavailable", "restore_failed", "race_invariant_violated",
-            "weak_synchronization", "reset_failed", "overlap_without_canary"}
+            "weak_synchronization", "reset_failed", "overlap_without_canary",
+            "kill_switch", "mutation_blocked_production", "rule_disabled",
+            "baseline_unauthorized", "ledger_unavailable", "limit_bypass",
+            "mass_assignment", "state_changed_despite_reject", "auth_failed",
+            "auth_host_not_allowed", "auth_identity_unknown", "inline_credential",
+            "invalid_auth_config", "invalid_secret_ref", "secret_file_permissions",
+            "secret_unavailable"}
 
 
 def result_properties(result):
