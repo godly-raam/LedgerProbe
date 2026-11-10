@@ -1,0 +1,1 @@
+SARIF 2.1.0 JSON schema from the OASIS SARIF TC (https://github.com/oasis-tcs/sarif-spec). Used only to validate generated reports in tests.

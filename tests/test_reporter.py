@@ -18,7 +18,7 @@ from pkg.reporter.sarif import write_sarif as sarif_writer
 from pkg.reporter._evidence import _REASONS
 from pkg.results import build_document
 
-SARIF_SCHEMA = json.loads((Path(__file__).parents[1] / ".demo" / "sarif-schema.json").read_text())
+SARIF_SCHEMA = json.loads((Path(__file__).parent / "fixtures" / "sarif-schema-2.1.0.json").read_text())
 
 
 def result(**changes):
