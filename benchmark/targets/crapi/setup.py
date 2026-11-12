@@ -194,11 +194,33 @@ def main() -> int:
     except Exception as exc:  # optional seed; the rule will surface ERROR if absent
         print(f"[!] optional video seed skipped: {exc}")
 
-    inputs = {
-        "contexts": {
-            "owner": {"Authorization": f"Bearer {owner_token}"},
-            "other": {"Authorization": f"Bearer {other_token}"},
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    password_file = args.out.with_name("staging-secrets.env")
+    password_file.write_text(f"CRAPI_PASSWORD={password}\n", encoding="utf-8")
+    password_file.chmod(0o600)
+    auth = {
+        "schema_version": "ledgerprobe-auth/1",
+        "identities": {
+            name: {
+                "provider": "login_request",
+                "environment": "staging",
+                "params": {
+                    "method": "POST",
+                    "path": "/identity/api/auth/login",
+                    "body": {
+                        "email": "{{%s_email}}" % name,
+                        "password_ref": f"file:{password_file}#CRAPI_PASSWORD",
+                    },
+                    "token_json_path": "token",
+                    "header_format": "Bearer {token}",
+                },
+            }
+            for name in ("owner", "other")
         },
+    }
+    args.out.with_name("ledgerprobe-auth.yaml").write_text(
+        json.dumps(auth, indent=2) + "\n", encoding="utf-8")
+    inputs = {
         "variables": {
             "owner_email": owner_email,
             "other_email": other_email,
@@ -212,7 +234,6 @@ def main() -> int:
             "video_id": video_id,
         },
     }
-    args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(inputs, indent=2) + "\n", encoding="utf-8")
     args.out.chmod(0o600)
     print(f"[+] {args.instance}: crAPI inputs at {args.out}")

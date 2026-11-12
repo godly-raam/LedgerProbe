@@ -1,11 +1,8 @@
 # Extension rules for DVR, authored once from the pinned README/source and
 # app/tests/vulns/level_*.py. No LedgerProbe output was used to choose them.
-#
-# Cases that cannot satisfy the restore contract are intentionally absent and
-# are recorded as NOT RUN by benchmark/run_ext.py:
-#   dvr-bfla-menu-delete      DELETE /menu/{item_id} has no API to recreate the id.
-#   dvr-bfla-menu-create-safe PUT /menu would create an item on a regression.
-#   dvr-bfla-menu-update-safe PUT /menu/{item_id} has no restore-to-original API.
+# The menu cases create disposable items with the Chef identity and remove them
+# with when_defined cleanup. The Chef password is reset through the upstream
+# loopback-only setup route and is held only in a 0600 file during the run.
 rules:
   - id: dvr-bola-profile-update
     name: Another Customer must not update an owner profile
@@ -193,6 +190,154 @@ rules:
           role: "{{restored_role}}"
     confirm: 1
 
+  - id: dvr-bfla-menu-delete
+    name: A Customer must not delete a Chef-created menu item
+    severity: high
+    owasp_category: API5:2023
+    cvss_score: 8.1
+    target_endpoints:
+      - path: /menu/{item_id}
+        method: DELETE
+    auth_contexts:
+      primary: chef
+      forbidden: owner
+    parameters:
+      path:
+        item_id: "{{fixture.item_id}}"
+    mutating: true
+    acceptable_status: [401, 403, 404]
+    fixture:
+      create:
+        - identity: chef
+          request:
+            method: PUT
+            path: /menu
+            body:
+              name: "{{gen.menu_name}}"
+              price: 7.5
+              category: "LedgerProbe Disposable"
+          expect_status: [201]
+          capture:
+            - {name: item_id, from: json, path: id}
+      cleanup:
+        - identity: chef
+          when_defined: fixture.item_id
+          request:
+            method: DELETE
+            path: /menu/{{fixture.item_id}}
+    verify:
+      mode: probe
+      request:
+        method: DELETE
+        path: /menu/{{fixture.item_id}}
+        auth: chef
+      expected_status: 404
+    variables:
+      generated:
+        - {name: menu_name, pattern: "lp_{rand12}"}
+
+  - id: dvr-bfla-menu-create-safe
+    name: A Customer must not create a menu item
+    severity: high
+    owasp_category: API5:2023
+    cvss_score: 8.1
+    target_endpoints:
+      - path: /menu
+        method: PUT
+    auth_contexts:
+      primary: chef
+      forbidden: owner
+    body:
+      name: "{{marker}}"
+      price: 7.5
+      category: "LedgerProbe Disposable"
+    mutating: true
+    acceptable_status: [401, 403, 404]
+    capture:
+      - {name: attack_id, from: json, path: id}
+    fixture:
+      create:
+        - identity: chef
+          request:
+            method: PUT
+            path: /menu
+            body:
+              name: "{{gen.menu_name}}"
+              price: 7.5
+              category: "LedgerProbe Disposable"
+          expect_status: [201]
+          capture:
+            - {name: item_id, from: json, path: id}
+      cleanup:
+        - identity: chef
+          when_defined: fixture.item_id
+          request:
+            method: DELETE
+            path: /menu/{{fixture.item_id}}
+        - identity: chef
+          when_defined: fixture.attack_id
+          request:
+            method: DELETE
+            path: /menu/{{fixture.attack_id}}
+    verify:
+      mode: marker
+      readback:
+        method: GET
+        path: /menu
+        auth: chef
+    variables:
+      generated:
+        - {name: menu_name, pattern: "lp_{rand12}"}
+
+  - id: dvr-bfla-menu-update-safe
+    name: A Customer must not update a Chef-created menu item
+    severity: high
+    owasp_category: API5:2023
+    cvss_score: 8.1
+    target_endpoints:
+      - path: /menu/{item_id}
+        method: PUT
+    auth_contexts:
+      primary: chef
+      forbidden: owner
+    parameters:
+      path:
+        item_id: "{{fixture.item_id}}"
+    body:
+      name: "{{marker}}"
+      price: 7.5
+      category: "LedgerProbe Disposable"
+    mutating: true
+    acceptable_status: [401, 403, 404]
+    fixture:
+      create:
+        - identity: chef
+          request:
+            method: PUT
+            path: /menu
+            body:
+              name: "{{gen.menu_name}}"
+              price: 7.5
+              category: "LedgerProbe Disposable"
+          expect_status: [201]
+          capture:
+            - {name: item_id, from: json, path: id}
+      cleanup:
+        - identity: chef
+          when_defined: fixture.item_id
+          request:
+            method: DELETE
+            path: /menu/{{fixture.item_id}}
+    verify:
+      mode: marker
+      readback:
+        method: GET
+        path: /menu
+        auth: chef
+    variables:
+      generated:
+        - {name: menu_name, pattern: "lp_{rand12}"}
+
   - id: dvr-bfla-admin-stats-safe
     name: Only Chef may read disk statistics
     severity: high
@@ -230,6 +375,7 @@ rules:
     inject:
       - name: role
         type: string
+        values: [Employee]
     readback:
       request:
         method: GET

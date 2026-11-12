@@ -87,8 +87,11 @@ def main() -> int:
     suffix = secrets.token_hex(5)
     owner = f"lp_owner_{suffix}"
     other = f"lp_other_{suffix}"
-    owner_email = f"owner-{suffix}@ledgerprobe.test"
-    other_email = f"other-{suffix}@ledgerprobe.test"
+    # Keep the local part valid under both the vulnerable and secure email
+    # regexes; the secure handler rejects hyphens before the @.
+    # VAmPI's secure email regex accepts only a 2-3 character TLD.
+    owner_email = f"owner{suffix}@example.com"
+    other_email = f"other{suffix}@example.com"
     password = "LedgerProbe!42"
     book_title = f"owner-book-{suffix}"
     canary = f"canary-vampi-{secrets.token_hex(12)}"
@@ -108,12 +111,15 @@ def main() -> int:
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
     password_file = args.out.with_name("staging-secrets.env")
-    password_file.write_text(f"VAMPI_PASSWORD={password}\n", encoding="utf-8")
+    password_file.write_text(
+        f"VAMPI_PASSWORD={password}\nVAMPI_ADMIN_PASSWORD=pass1\n",
+        encoding="utf-8",
+    )
     password_file.chmod(0o600)
     auth = {
         "schema_version": "ledgerprobe-auth/1",
         "identities": {
-            name: {
+            **{name: {
                 "provider": "login_request",
                 "environment": "staging",
                 "params": {
@@ -124,8 +130,19 @@ def main() -> int:
                     "token_json_path": "auth_token",
                     "header_format": "Bearer {token}",
                 },
-            }
-            for name in ("owner", "other")
+            } for name in ("owner", "other")},
+            "admin": {
+                "provider": "login_request",
+                "environment": "staging",
+                "params": {
+                    "method": "POST",
+                    "path": "/users/v1/login",
+                    "body": {"username": "admin",
+                             "password_ref": f"file:{password_file}#VAMPI_ADMIN_PASSWORD"},
+                    "token_json_path": "auth_token",
+                    "header_format": "Bearer {token}",
+                },
+            },
         },
     }
     args.out.with_name("ledgerprobe-auth.yaml").write_text(
@@ -140,7 +157,7 @@ def main() -> int:
             "canary_value": canary,
             "original_password": password,
             "new_password": "LedgerProbe!43",
-            "new_email": f"new-{suffix}@ledgerprobe.test",
+            "new_email": f"new{suffix}@example.com",
         },
     }
     args.out.parent.mkdir(parents=True, exist_ok=True)

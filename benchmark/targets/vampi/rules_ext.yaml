@@ -1,9 +1,96 @@
-# Extension rules for VAmPI, authored once from README.md, api_views/users.py and
-# openapi_specs/openapi3.yml. The register-admin cases create an account and
-# cannot restore it through the API (VAmPI exposes no self-delete), so they are
-# NOT RUN; the admin-only DELETE case is likewise absent because a successful
-# deletion cannot be restored. benchmark/run_ext.py records those three.
+# Extension rules for VAmPI, authored once from README.md, api_views/users.py,
+# api_views/json_schemas.py and openapi_specs/openapi3.yml. The two register
+# rules use the disposable-fixture contract: the attack creates the account and
+# the seeded admin removes it in cleanup. The delete-user rule creates a
+# disposable victim first and removes it as admin in cleanup. No target state
+# outside those disposable objects is changed.
 rules:
+  - id: vampi-mass-assignment-register-admin
+    name: Registration must not accept an admin field
+    severity: critical
+    owasp_category: API6:2023
+    cvss_score: 9.1
+    target_endpoints:
+      - path: /users/v1/register
+        method: POST
+    auth_contexts:
+      primary: admin
+      forbidden: owner
+    check: mass_assignment
+    request:
+      method: POST
+      path: /users/v1/register
+      auth: none
+      body:
+        username: "{{gen.reg_username}}"
+        password: "{{gen.reg_password}}"
+        email: "{{gen.reg_username}}@ledgerprobe.test"
+    inject:
+      - name: admin
+        type: boolean
+        values: [true]
+    readback:
+      request:
+        method: GET
+        path: /users/v1/_debug
+        auth: none
+      paths:
+        admin: users.5.admin
+    mutating: true
+    fixture:
+      cleanup:
+        - identity: admin
+          request:
+            method: DELETE
+            path: /users/v1/{{gen.reg_username}}
+    variables:
+      generated:
+        - {name: reg_username, pattern: "lp_{rand10}"}
+        - {name: reg_password, pattern: "lp_{rand16}"}
+
+  - id: vampi-mass-assignment-register-admin-secure
+    name: Secure registration must ignore an admin field
+    severity: critical
+    owasp_category: API6:2023
+    cvss_score: 9.1
+    target_endpoints:
+      - path: /users/v1/register
+        method: POST
+    auth_contexts:
+      primary: admin
+      forbidden: owner
+    check: mass_assignment
+    request:
+      method: POST
+      path: /users/v1/register
+      auth: none
+      body:
+        username: "{{gen.reg_username}}"
+        password: "{{gen.reg_password}}"
+        email: "{{gen.reg_username}}@ledgerprobe.test"
+    inject:
+      - name: admin
+        type: boolean
+        values: [true]
+    readback:
+      request:
+        method: GET
+        path: /users/v1/_debug
+        auth: none
+      paths:
+        admin: users.5.admin
+    mutating: true
+    fixture:
+      cleanup:
+        - identity: admin
+          request:
+            method: DELETE
+            path: /users/v1/{{gen.reg_username}}
+    variables:
+      generated:
+        - {name: reg_username, pattern: "lp_{rand10}"}
+        - {name: reg_password, pattern: "lp_{rand16}"}
+
   - id: vampi-bola-email-ignores-path-user
     name: Email update must not affect the user named in the path
     severity: high
@@ -28,7 +115,7 @@ rules:
         method: GET
         path: /me
         auth: primary
-      fields: [email]
+      fields: [data.email]
     restore:
       - method: PUT
         path: /users/v1/{{other_username}}/email
@@ -41,3 +128,47 @@ rules:
         body:
           email: "{{owner_email}}"
     confirm: 1
+
+  - id: vampi-bfla-delete-user-admin-only
+    name: A non-admin must not delete a disposable user
+    severity: critical
+    owasp_category: API5:2023
+    cvss_score: 9.1
+    target_endpoints:
+      - path: /users/v1/{username}
+        method: DELETE
+    auth_contexts:
+      primary: admin
+      forbidden: owner
+    parameters:
+      path:
+        username: "{{gen.victim_username}}"
+    mutating: true
+    acceptable_status: [401, 403, 404]
+    fixture:
+      create:
+        - identity: none
+          request:
+            method: POST
+            path: /users/v1/register
+            body:
+              username: "{{gen.victim_username}}"
+              password: "{{gen.victim_password}}"
+              email: "{{gen.victim_username}}@ledgerprobe.test"
+          expect_status: [200]
+      cleanup:
+        - identity: admin
+          request:
+            method: DELETE
+            path: /users/v1/{{gen.victim_username}}
+    verify:
+      mode: probe
+      request:
+        method: GET
+        path: /users/v1/{{gen.victim_username}}
+        auth: none
+      expected_status: 404
+    variables:
+      generated:
+        - {name: victim_username, pattern: "lp_{rand10}"}
+        - {name: victim_password, pattern: "lp_{rand16}"}

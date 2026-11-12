@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Create two DVR Customers, seed owned objects, and write scanner inputs.
-
-Tokens are obtained only to seed objects and are never persisted. The engine's
-script identities re-login from the 0600 password file at scan time.
+"""Create two DVR Customers and a Chef context, seed owned objects, and write
+scanner inputs. Tokens are obtained only to seed objects and are never
+persisted; the engine re-logs in with form requests from the 0600 password
+file at scan time.
 """
 
 from __future__ import annotations
@@ -10,15 +10,14 @@ from __future__ import annotations
 import argparse
 import json
 import secrets
-import sys
+import subprocess
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
 
-TARGET = Path(__file__).resolve().parent
-
+COMPOSE = Path(__file__).resolve().parent / "compose.yaml"
 
 def call(base: str, method: str, path: str, payload=None,
          token: str | None = None, form: bool = False):
@@ -81,6 +80,33 @@ def login(base: str, username: str, password: str) -> str:
     return token
 
 
+def reset_chef_password(base: str) -> str:
+    """Use the upstream loopback-only reset route and keep the secret in memory."""
+    status, body = call(base, "GET", "/admin/reset-chef-password")
+    password = body.get("password") if isinstance(body, dict) else None
+    if status == 200 and isinstance(password, str) and password:
+        return password
+    # Docker publishes the port from a bridge address, so the host request is
+    # not 127.0.0.1 from the application's perspective. Retry inside the web
+    # container, where the upstream loopback guard is satisfied.
+    command = [
+        "docker", "compose", "-f", str(COMPOSE), "exec", "-T", "web",
+        "python", "-c",
+        "import urllib.request; print(urllib.request.urlopen("
+        "'http://127.0.0.1:8091/admin/reset-chef-password', timeout=10)"
+        ".read().decode())",
+    ]
+    completed = subprocess.run(command, capture_output=True, text=True, timeout=30)
+    try:
+        payload = json.loads(completed.stdout.strip().splitlines()[-1])
+        password = payload.get("password")
+    except (IndexError, ValueError, AttributeError):
+        password = None
+    if completed.returncode != 0 or not isinstance(password, str) or not password:
+        raise SystemExit(f"chef password reset failed: {status}")
+    return password
+
+
 def first_item(base: str, path: str, token: str):
     status, body = call(base, "GET", path, token=token)
     if status != 200:
@@ -109,6 +135,8 @@ def main() -> int:
     register(base, other, other_phone, password, other_first, "Other")
     owner_token = login(base, owner, password)
     other_token = login(base, other, password)
+    chef_password = reset_chef_password(base)
+    login(base, "chef", chef_password)
 
     order_payload = {
         "delivery_address": f"lp-address-{secrets.token_hex(12)}",
@@ -153,7 +181,8 @@ def main() -> int:
     password_file = args.out.with_name("staging-secrets.env")
     password_file.write_text(
         f"DVR_OWNER_USERNAME={owner}\nDVR_OWNER_PASSWORD={password}\n"
-        f"DVR_OTHER_USERNAME={other}\nDVR_OTHER_PASSWORD={password}\n",
+        f"DVR_OTHER_USERNAME={other}\nDVR_OTHER_PASSWORD={password}\n"
+        f"DVR_CHEF_USERNAME=chef\nDVR_CHEF_PASSWORD={chef_password}\n",
         encoding="utf-8",
     )
     password_file.chmod(0o600)
@@ -162,17 +191,22 @@ def main() -> int:
         "schema_version": "ledgerprobe-auth/1",
         "identities": {
             name: {
-                "provider": "script",
+                "provider": "login_request",
                 "environment": "staging",
                 "params": {
-                    "argv": [sys.executable, str(TARGET / "login.py"),
-                             "--identity", name,
-                             "--password-file", str(password_file)],
-                    "timeout": 30,
-                    "env": ["PATH"],
+                    "method": "POST",
+                    "path": "/token",
+                    "body_format": "form",
+                    "body": {
+                        "grant_type": "password",
+                        "username": "{{%s_username}}" % name,
+                        "password_ref": f"file:{password_file}#DVR_{name.upper()}_PASSWORD",
+                    },
+                    "token_json_path": "access_token",
+                    "header_format": "Bearer {token}",
                 },
             }
-            for name in ("owner", "other")
+            for name in ("owner", "other", "chef")
         },
     }
     args.out.with_name("ledgerprobe-auth.yaml").write_text(
@@ -181,6 +215,7 @@ def main() -> int:
         "variables": {
             "owner_username": owner,
             "other_username": other,
+            "chef_username": "chef",
             "owner_first_name": owner_first,
             "other_first_name": other_first,
             "owner_last_name": "Owner",

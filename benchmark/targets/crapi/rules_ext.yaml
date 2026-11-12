@@ -1,5 +1,40 @@
-# Extension rules for crAPI. Both documented cases mutate state that crAPI
-# cannot restore through its API: a negative-quantity order changes the credit
-# ledger, and the BFLA video delete destroys the video. They are therefore NOT
-# RUN under the pre-registered restore contract; no weakened restore is used.
-rules: []
+# Extension rules for crAPI, authored from docs/challenges.md,
+# docs/challengeSolutions.md, the pinned OpenAPI document, and the identity
+# controller. The disabled admin video route is checked against the owner's
+# per-reset uploaded video. The setup upload is the only create path: the engine
+# fixture schema has no multipart body, so cleanup uses the vulnerable admin
+# DELETE and the uploaded object is recreated by every fresh reset.
+#
+# The negative-quantity order case remains NOT RUN: it changes shared shop
+# inventory and the caller's credit balance, and crAPI exposes no exact
+# cancel/refund or disposable-balance API. No gate or restore is weakened.
+rules:
+  - id: crapi-bfla-admin-delete-video
+    name: A Customer must not delete another user's video through the admin route
+    severity: high
+    owasp_category: API5:2023
+    cvss_score: 8.1
+    target_endpoints:
+      - path: /identity/api/v2/admin/videos/{video_id}
+        method: DELETE
+    auth_contexts:
+      primary: owner
+      forbidden: other
+    parameters:
+      path:
+        video_id: "{{video_id}}"
+    mutating: true
+    acceptable_status: [401, 403, 404]
+    fixture:
+      cleanup:
+        - identity: other
+          request:
+            method: DELETE
+            path: /identity/api/v2/admin/videos/{{video_id}}
+    verify:
+      mode: probe
+      request:
+        method: GET
+        path: /identity/api/v2/user/videos/{{video_id}}
+        auth: owner
+      expected_status: 204
