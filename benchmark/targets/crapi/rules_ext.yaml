@@ -33,8 +33,17 @@ rules:
             path: /identity/api/v2/admin/videos/{{video_id}}
     verify:
       mode: probe
+      # Post-headline correction. The deleted state is 404, not 204: with no video
+      # row for the user, ProfileServiceImpl.getProfileVideo throws
+      # CRAPIExceptionHandler(VIDEO_NOT_FOUND, 404)
+      # (services/identity/src/main/java/com/crapi/service/Impl/ProfileServiceImpl.java:126-132)
+      # and ExceptionHandler maps that to HTTP 404
+      # (services/identity/src/main/java/com/crapi/exception/ExceptionHandler.java:48-50).
+      # The controller's 204 branch
+      # (services/identity/src/main/java/com/crapi/controller/ProfileController.java:46-51)
+      # is unreachable after a delete.
       request:
         method: GET
         path: /identity/api/v2/user/videos/{{video_id}}
         auth: owner
-      expected_status: 204
+      expected_status: 404

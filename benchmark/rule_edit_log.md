@@ -17,3 +17,16 @@ headline scan. The first-run report and first-run rules are unchanged.
 | 2026-11-12T10:46Z | after rewrite | `benchmark/targets/dvr/rules_ext.yaml` | `dvr-bola-profile-update` | No semantic rule edit; retained the inline body. | Amendment 1 request-body `$ref`/composition resolution now supplies the documented body schema; first-run failed with `execution_error` before selection. | ERROR, `execution_error` |
 | 2026-11-12T10:46Z | after rewrite | `benchmark/targets/dvr/rules_ext.yaml` | `dvr-bola-orders-list-safe`, `dvr-bola-coupons-safe` | Retained the owner-delivery-address and owner-coupon-id canaries and `require_owner_canary_in_baseline: true`; no semantic change. | Amendment 1 caller/shared canary requirement; first run used generic overlap and returned false positives with `canary_matched=false`. | FAIL `leak_detected` (FP) for both |
 | 2026-11-12T10:46Z | after rewrite | `benchmark/targets/dvr/rules_ext.yaml` | `dvr-mass-assignment-profile-patch` | Replaced the string marker candidate with the schema/source enum value `Employee` in `inject.values`. | Amendment 1 enum-aware mass-assignment values; first run sent `lp-marker-...` and DVR returned 500 (`invalid input value for enum userrole`). | INCONCLUSIVE, `unexpected_status` |
+
+## Post-headline correction
+
+The row below was applied after the after-Amendments headline run was scored. It
+is a post-headline correction, not a pre-headline rule edit: the rule was fixed
+only after its false negative was observed in the headline. No engine change, no
+ground-truth change, and no headline number in `README.md` or
+`docs/VALIDATION.md` is altered by it. Its outcome is reported separately as
+"post-headline; not the headline".
+
+| Timestamp (UTC) | Run | Rule file | Case id | Edit | Reason | First-run result | Headline result (after Amendments) | Post-correction result |
+|---|---|---|---|---|---|---|---|---|
+| 2026-11-12T11:18Z | post-headline correction | `benchmark/targets/crapi/rules_ext.yaml` | `crapi-bfla-admin-delete-video` | Changed the owner readback probe `expected_status` from `204` to `404`. | Rule authoring error found after the headline run: the probe declared the identity controller's `NO_CONTENT` branch, but the deleted state is 404, because `ProfileServiceImpl.getProfileVideo` throws `CRAPIExceptionHandler(VIDEO_NOT_FOUND, 404)` when the user has no video row (`ProfileServiceImpl.java:126-132`) and `ExceptionHandler` returns that status (`ExceptionHandler.java:48-50`). The wrong expectation made the real deletion read as "no effect" and scored a false negative. | NOT RUN, `restore_contract` | PASS (`FN`), `no_effect` | FAIL (`TP`), `state_changed_by_other` (3/3 runs) |

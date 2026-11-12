@@ -29,7 +29,7 @@ The separate preregistered extension adds **19 cases across VAmPI, crAPI, and DV
 | First run | 2/2/4/0/2/1/8 | **2 of 8** | **4 of 11** | 8 (4 vulnerable, 4 safe) |
 | After Amendments 1-2 (rules and engine adjusted after seeing the first run) | 5/0/8/1/1/3/1 | **5 of 8** | **8 of 11** | 1 (vulnerable) |
 
-The after row still has one NOT RUN: crAPI's shared-credit negative-quantity case has no exact restore or disposable object. See [`docs/VALIDATION.md`](docs/VALIDATION.md) for the per-case before/after table, Wilson intervals, determinism, and diagnoses.
+The after row still has one NOT RUN: crAPI's shared-credit negative-quantity case has no exact restore or disposable object. One rule, `crapi-bfla-admin-delete-video`, was corrected after the headline run because its owner readback probe asserted `204` where crAPI returns `404`; the headline rows above are left as recorded and the correction is reported separately in [`docs/VALIDATION.md`](docs/VALIDATION.md). See the same document for the per-case before/after table, Wilson intervals, determinism, and diagnoses.
 
 ## Install
 

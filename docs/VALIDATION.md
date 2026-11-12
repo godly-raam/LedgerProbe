@@ -350,3 +350,74 @@ equivalent.
 | DVR caller-scope cases cannot prove a safe negative when generic overlap exists without an owner canary. | Three safe cases are `INC_s`, not TN. |
 | Business-limit and race checks remain fixture-only. | This re-run says nothing about those check types on real targets. |
 | One unscored smoke pass preceded the scored VAmPI run. | It is not included in the after counts; the scored headline starts at run 1. |
+
+## Post-headline correction (rule fix after seeing a false negative)
+
+This section is a **post-headline** record. It does not replace the first-run or
+after-Amendments sections above, and the headline numbers in `README.md` and in
+"After Amendments 1-2 counts" are unchanged. One rule,
+`crapi-bfla-admin-delete-video`, was corrected at `2026-11-12T11:18Z`, after the
+after-Amendments headline was scored, because its owner readback probe asserted
+the wrong deleted-state status. The engine was still frozen at
+`a5a8d60c67c11c40c80500d0adb3dc5ddfaf2fdf` (diff `0` bytes), and
+`benchmark/PREREGISTRATION.md` and the scored ground truth were unchanged (diffs
+`0` bytes). The edit is recorded in
+[`benchmark/rule_edit_log.md`](../benchmark/rule_edit_log.md) as a post-headline
+correction.
+
+The after-Amendments limitations table above is preserved exactly as recorded;
+its row stating that this rule still had a wrong probe expectation is superseded
+by this section.
+
+### Source of the deleted-state status
+
+| Location (pinned crAPI `v1.1.6`, `700f03d12a392d9e408260b4beae72ed02a4a1a4`) | What it says |
+|---|---|
+| `services/identity/src/main/java/com/crapi/service/Impl/ProfileServiceImpl.java:126-132` | `getProfileVideo` returns the row only when the caller's video row exists and its id matches the requested one; otherwise it throws `CRAPIExceptionHandler(UserMessage.VIDEO_NOT_FOUND, 404)`. |
+| `services/identity/src/main/java/com/crapi/exception/ExceptionHandler.java:48-50` | `handleCRAPIException` builds the response with `HttpStatus.valueOf(e.getStatus())`, so that exception is an HTTP `404`. |
+| `services/identity/src/main/java/com/crapi/controller/ProfileController.java:46-51` | The controller's `HttpStatus.NO_CONTENT` branch is reached only when the service returns `null`; the service throws instead, so `204` never describes the deleted state. |
+
+The corrected probe asserts `404`. It is derived from crAPI's own route and
+exception mapping, not from the verdict.
+
+### Before and after for the one case
+
+| Case | Label | Owner readback probe | Before (headline) | After (correction) |
+|---|---|---|---|---|
+| `crapi-bfla-admin-delete-video` | vulnerable | `GET /identity/api/v2/user/videos/{video_id}`, `expected_status` | `204`; observed `404`; `probe_matched=false`; PASS (`FN`), `no_effect` | `404`; observed `404`; `probe_matched=true`; FAIL (`TP`), `state_changed_by_other` |
+
+The deletion itself succeeded in both cases (attack `DELETE` returned `200`).
+The headline PASS came from the probe's wrong expectation, not from the
+absence of a mutation.
+
+### Post-correction re-run (crAPI only, three fresh resets)
+
+Target: crAPI `700f03d12a392d9e408260b4beae72ed02a4a1a4` (`v1.1.6`) through
+`benchmark/targets/crapi/compose.yaml`, with `--environment staging`,
+`--allow-mutations`, `--spec-check warn`, and
+`benchmark/targets/crapi/rules_ext.yaml` as the only rule file. Each run started
+after `docker compose down -v` and a fresh `setup.py` seed.
+
+| Run | Timestamp (UTC) | Exit | Verdict | Reason | Attack status | Probe status | Probe matched |
+|---|---|---:|---|---|---:|---:|---|
+| 1 | `2026-11-12T11:21:07+00:00` | 1 | FAIL | `state_changed_by_other` | 200 | 404 | yes |
+| 2 | `2026-11-12T11:22:35+00:00` | 1 | FAIL | `state_changed_by_other` | 200 | 404 | yes |
+| 3 | `2026-11-12T11:24:02+00:00` | 1 | FAIL | `state_changed_by_other` | 200 | 404 | yes |
+
+The three runs match: rule id, verdict, reason, and evidence were identical, and
+every run exited `1` with one finding.
+
+### Corrected total (post-headline; not the headline)
+
+| Run | `TP/FP/TN/FN/INC_vuln/INC_safe/NOT RUN` | Vulnerable cases detected | Safe cases passed | NOT RUN |
+|---|---|---|---|---|
+| After Amendments 1-2 (headline, unchanged) | 5/0/8/1/1/3/1 | 5 of 8 | 8 of 11 | 1 (vulnerable) |
+| **Post-headline correction (this section; not the headline)** | **6/0/8/0/1/3/1** | **6 of 8** | **8 of 11** | **1 (vulnerable)** |
+
+Only `crapi-bfla-admin-delete-video` changed. Corrected crAPI BFLA row:
+`Nv 1, TP 1, FN 0, INC_v 0, NR_v 0`, detection `1/1 = 100.0% (20.7-100.0; N=1)`.
+Corrected overall detection `6/8 = 75.0% (40.9-92.9; N=8)`; specificity is
+unchanged at `8/11 = 72.7% (43.4-90.3; N=11)`. Per-target detection becomes
+VAmPI `1/1`, crAPI `1/2`, DVR `4/5`. The remaining NOT RUN is the crAPI
+shared-credit negative-quantity case, and the remaining `INC_vuln` is
+`dvr-bola-profile-update`.
