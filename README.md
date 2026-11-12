@@ -5,6 +5,33 @@
 
 LedgerProbe is an API authorization and business-logic testing engine. It reads an OpenAPI, Swagger, or Postman document plus YAML policies, then compares an owner's successful baseline with a forbidden identity, negative controls, unauthenticated controls, and owner-specific canaries before it emits a verdict. The difference is the evidence discipline: differential checks with controls, PASS / FAIL / INCONCLUSIVE verdicts, and reports that retain only allowlisted metadata. `mock-bank-api` is a local test fixture, not the product.
 
+## At a glance
+
+Counts only, every rate with its numerator and denominator; not an independent
+validation (23 benchmark cases, 19 extension cases).
+
+| Run | Vulnerable detected | False positives | Abstentions | Not run |
+|---|---:|---:|---:|---:|
+| 23-case benchmark (VAmPI, crAPI), first pass, pre-tuning (v1) | 10 of 13 | 0 of 10 safe | 9 | 0 |
+| Same 23 cases, strict status baseline (exact 403) | 12 of 13 | 9 of 10 safe | 2 | 0 |
+| Same 23 cases, lenient status baseline (`{401,403,404}`) | 13 of 13 | 8 of 10 safe | 0 | 0 |
+| Pre-registered extension (VAmPI, crAPI, DVR), first run | 2 of 8 | 2 of 11 safe | 3 | 8 (4 vulnerable, 4 safe) |
+| Same extension, tuned after seeing the first run | 5 of 8 | 0 of 11 safe | 4 | 1 (vulnerable) |
+| Post-headline rule correction (one crAPI rule; separate from the headline) | 6 of 8 | 0 of 11 safe | 4 | 1 (vulnerable) |
+
+Object-scoped endpoints only (11 cases), where public and shared endpoints
+cannot inflate the comparison:
+
+| Object-scoped cases | False positives |
+|---|---:|
+| Strict status baseline | 3 of 11 |
+| Lenient status baseline | 1 of 11 |
+| LedgerProbe differential | 0 of 11 |
+
+Same author, small N; first-run rows are pre-tuning, tuned rows came after seeing
+them (v1 was also 0 of 11 false positives on the object-scoped cut). Sources:
+[docs/BENCHMARK.md](docs/BENCHMARK.md), [docs/VALIDATION.md](docs/VALIDATION.md).
+
 ## Results first
 
 Counts are `TP/FP/TN/FN/INC_vuln/INC_safe`. `INCONCLUSIVE` is never counted as correct. The v1 number is the pre-tuning result; **v2 and v3 rules were authored after viewing earlier results**. This is a same-author benchmark with no confidence intervals and a small sample: **23 cases across 18 distinct endpoints**. VAmPI contributes 13 cases over 8 endpoints in both target modes; crAPI contributes 10 cases. Legacy rows were recorded at v1 and not re-run for v2/v3. The v3 differential row was re-run.
@@ -174,6 +201,7 @@ See [`docs/INTEGRATIONS.md`](docs/INTEGRATIONS.md) for configuration and [`docs/
 - Race results are local fixture measurements; a PASS only means no violation was observed in the tested rounds.
 - Scope declarations (`object`, `caller`, `shared`) are supplied by the rule author and are not independently verified.
 - Host allowlisting and mutation gates are not a network sandbox; scan only systems you are authorized to test.
+- Planned work is listed in [docs/ROADMAP.md](docs/ROADMAP.md); none of it exists in the current release.
 - `h2_single_packet` remains experimental and untested against a real HTTP/2 server.
 
 ## Repository layout, development, test commands, and license
