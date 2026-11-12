@@ -235,3 +235,118 @@ The runtime evidence is under `benchmark/.out/` and is not committed:
 `vampi/{vulnerable,secure}/run{1,2,3}.{json,xml,log}`, and
 `crapi/default/run{1,2,3}.log`. Generated auth, input, password, and token files
 were removed after scoring. Target containers were stopped after the runs.
+
+## After Amendments 1-2 (single-pass re-run)
+
+This section is a separate **after tuning** record. It does not replace the
+first-run headline above. The engine was frozen at
+`a5a8d60c67c11c40c80500d0adb3dc5ddfaf2fdf` (Amendment 2), the working HEAD was
+`b8320f0`, and the target snapshots were the pinned VAmPI digest
+`sha256:0a5a224b6e14ae7da6a6ea265178ff71286ff903aec74adee98f660bb0e4ca12`,
+crAPI `700f03d12a392d9e408260b4beae72ed02a4a1a4`, and DVR
+`d32d09972aec7830f5f1d4a5d274cac7aae7eb82`. The engine diff against the
+Amendment 2 SHA was zero bytes. VAmPI ran vulnerable and secure instances;
+crAPI and DVR ran their single default instance. Every scored run used a fresh
+Compose reset and setup. An unscored pre-headline smoke pass was used only to
+validate the harness before the headline; it is not included in the counts.
+
+All rules were rewritten once before the headline from the same target docs,
+source, and OpenAPI inputs as the first run. Every edit is recorded in
+[`benchmark/rule_edit_log.md`](../benchmark/rule_edit_log.md): Amendment 2
+disposable fixtures for the four VAmPI cases, the three DVR menu cases and the
+crAPI video case; the VAmPI `/me` `data.email` snapshot fix; the DVR enum value
+`Employee`; and no rule for the shared-credit crAPI negative-quantity case. The
+crAPI video upload remains in target setup because engine fixtures have no
+multipart body. No rule was changed after the headline verdicts.
+
+### Before and after per case
+
+`NR_v`/`NR_s` mean the case had no rule and therefore no request. `INC_v` and
+`INC_s` mean an INCONCLUSIVE/ERROR verdict on a vulnerable or safe case. The
+first-run values in this table are copied from the frozen first-run section;
+they are not re-scored here.
+
+| Case | Label | First run | First reason | After run | After reason | Change driver |
+|---|---|---|---|---|---|---|
+| `vampi-mass-assignment-register-admin` | vulnerable | NOT RUN (`NR_v`) | `restore_contract` | FAIL | `mass_assignment` | Amendment 2 disposable account and admin cleanup |
+| `vampi-mass-assignment-register-admin-secure` | safe | NOT RUN (`NR_s`) | `restore_contract` | PASS | — | Amendment 2 disposable account and admin cleanup |
+| `vampi-bola-email-ignores-path-user` | safe | INCONCLUSIVE (`INC_s`) | `verify_unavailable` | PASS | `no_effect` | Rule-authoring fix from the first-run report: snapshot path `data.email` |
+| `vampi-bfla-delete-user-admin-only` | safe | NOT RUN (`NR_s`) | `restore_contract` | PASS | — | Amendment 2 disposable victim and admin cleanup |
+| `crapi-mass-assignment-negative-order-quantity` | vulnerable | NOT RUN (`NR_v`) | `restore_contract` | NOT RUN (`NR_v`) | `restore_contract` | No exact shared-credit restore or disposable object; no rule added |
+| `crapi-bfla-admin-delete-video` | vulnerable | NOT RUN (`NR_v`) | `restore_contract` | PASS (`FN`) | `no_effect` | Amendment 2 cleanup; probe expected 204 but target returns 404 |
+| `dvr-bola-profile-update` | vulnerable | ERROR (`INC_v`) | `execution_error` | ERROR (`INC_v`) | `execution_error` | Amendment 1 resolved the `$ref`, but the parser flattens nullable `anyOf` fields to `type: null` |
+| `dvr-bola-order-read` | vulnerable | FAIL (`TP`) | `leak_detected` | FAIL (`TP`) | `leak_detected` | Unchanged |
+| `dvr-bola-order-status-safe` | safe | PASS (`TN`) | `denial` | PASS (`TN`) | — | Unchanged |
+| `dvr-bola-orders-list-safe` | safe | FAIL (`FP`) | `leak_detected` | INCONCLUSIVE (`INC_s`) | `overlap_without_canary` | Amendment 1 caller canary requirement; no owner canary in forbidden response |
+| `dvr-bola-profile-read-safe` | safe | PASS (`TN`) | `caller_scoped` | INCONCLUSIVE (`INC_s`) | `overlap_without_canary` | Amendment 1 caller canary requirement; no owner canary in forbidden response |
+| `dvr-bola-coupons-safe` | safe | FAIL (`FP`) | `leak_detected` | INCONCLUSIVE (`INC_s`) | `overlap_without_canary` | Amendment 1 caller canary requirement; no owner canary in forbidden response |
+| `dvr-bfla-menu-delete` | vulnerable | NOT RUN (`NR_v`) | `restore_contract` | FAIL (`TP`) | `state_changed_by_other` | Amendment 2 Chef-created item and `when_defined` cleanup |
+| `dvr-bfla-update-role` | vulnerable | FAIL (`TP`) | `state_changed_by_other` | FAIL (`TP`) | `state_changed_by_other` | Unchanged |
+| `dvr-bfla-menu-create-safe` | safe | NOT RUN (`NR_s`) | `restore_contract` | PASS (`TN`) | — (`403`) | Amendment 2 Chef-created item and attack-id cleanup |
+| `dvr-bfla-menu-update-safe` | safe | NOT RUN (`NR_s`) | `restore_contract` | PASS (`TN`) | — (`403`) | Amendment 2 Chef-created item and cleanup |
+| `dvr-bfla-admin-stats-safe` | safe | PASS (`TN`) | `assertion` | PASS (`TN`) | — | Unchanged |
+| `dvr-mass-assignment-profile-patch` | vulnerable | INCONCLUSIVE (`INC_v`) | `unexpected_status` | FAIL (`TP`) | `mass_assignment` | Amendment 1 enum-aware value `Employee` |
+| `dvr-mass-assignment-profile-put-safe` | safe | PASS (`TN`) | `no effect` | PASS (`TN`) | — | Unchanged |
+
+### After Amendments 1-2 counts
+
+Every rate shows its numerator/denominator and Wilson 95% interval. Detection is
+`TP / (TP + FN + INC_vuln + NR_v)`; specificity is
+`TN / (TN + FP + INC_safe + NR_s)`. `NOT RUN` is a miss for a vulnerable case.
+
+| Target | Class | Nv | TP | FN | INC_v | NR_v | Detection (95% CI; N) | Ns | TN | FP | INC_s | NR_s | Specificity (95% CI; N) |
+|---|---|---:|---:|---:|---:|---:|---|---:|---:|---:|---:|---:|---|
+| VAmPI | mass_assignment | 1 | 1 | 0 | 0 | 0 | 1/1 = 100.0% (20.7–100.0; N=1) | 1 | 1 | 0 | 0 | 0 | 1/1 = 100.0% (20.7–100.0; N=1) |
+| VAmPI | bola | 0 | 0 | 0 | 0 | 0 | — | 1 | 1 | 0 | 0 | 0 | 1/1 = 100.0% (20.7–100.0; N=1) |
+| VAmPI | bfla | 0 | 0 | 0 | 0 | 0 | — | 1 | 1 | 0 | 0 | 0 | 1/1 = 100.0% (20.7–100.0; N=1) |
+| crAPI | mass_assignment | 1 | 0 | 0 | 0 | 1 | 0/1 = 0.0% (0.0–79.3; N=1) | 0 | 0 | 0 | 0 | 0 | — |
+| crAPI | bfla | 1 | 0 | 1 | 0 | 0 | 0/1 = 0.0% (0.0–79.3; N=1) | 0 | 0 | 0 | 0 | 0 | — |
+| DVR | bola | 2 | 1 | 0 | 1 | 0 | 1/2 = 50.0% (9.5–90.5; N=2) | 4 | 1 | 0 | 3 | 0 | 1/4 = 25.0% (4.6–69.9; N=4) |
+| DVR | bfla | 2 | 2 | 0 | 0 | 0 | 2/2 = 100.0% (34.2–100.0; N=2) | 3 | 3 | 0 | 0 | 0 | 3/3 = 100.0% (43.8–100.0; N=3) |
+| DVR | mass_assignment | 1 | 1 | 0 | 0 | 0 | 1/1 = 100.0% (20.7–100.0; N=1) | 1 | 1 | 0 | 0 | 0 | 1/1 = 100.0% (20.7–100.0; N=1) |
+| **Overall** | **all** | **8** | **5** | **1** | **1** | **1** | **5/8 = 62.5% (30.6–86.3; N=8)** | **11** | **8** | **0** | **3** | **0** | **8/11 = 72.7% (43.4–90.3; N=11)** |
+
+Per target totals: VAmPI `1/0/3/0/0/0/0` (detection 1/1, specificity 3/3);
+crAPI `0/0/0/1/0/0/1` (detection 0/2); DVR `4/0/5/0/1/3/0` (detection 4/5,
+specificity 5/8). The after row has one NOT RUN: the crAPI shared-credit
+negative-quantity case.
+
+### Determinism
+
+| Target | Cases per run | Runs | Same verdict/reason/evidence | Flips |
+|---|---:|---|---|---:|
+| VAmPI vulnerable | 3 checks | run 1, 2, 3 | yes | 0 |
+| VAmPI secure | 3 checks | run 1, 2, 3 | yes | 0 |
+| crAPI default | 1 check | run 1, 2, 3 | yes | 0 |
+| DVR default | 13 checks | run 1, 2, 3 | yes | 0 |
+
+Each run started after a fresh Compose reset and setup. VAmPI run 1/2/3
+exited `1` for vulnerable and `0` for secure; crAPI exited `0` in all three; DVR
+exited `2` in all three because `dvr-bola-profile-update` remained an execution
+error. Rule ids, verdicts, reason codes, and evidence values were identical
+across the three runs. The 3 caller-scope DVR cases were consistently
+`overlap_without_canary` rather than flapping between PASS and FAIL.
+
+### rule_edit_log summary
+
+[`benchmark/rule_edit_log.md`](../benchmark/rule_edit_log.md) records 12
+single-pass edit rows: four VAmPI rules, one crAPI video rule, one crAPI
+non-edit decision, three DVR menu rules, the VAmPI email path correction, the
+DVR enum value, and the unchanged DVR `$ref`/canary rules. The crAPI
+negative-quantity case was deliberately left without a rule because the credit
+balance and stock are shared and there is no exact restore or disposable
+equivalent.
+
+### Limitations of this after run
+
+| Limitation | Consequence |
+|---|---|
+| Rules were rewritten and the engine was amended after the first run was seen. | The first run remains the pre-tuning number; the after row is a tuned, same-author result, not an independent confirmation. |
+| The same author wrote the engine, ground truth, rules, and setup adapters. | Target knowledge and rule-authoring bias remain. |
+| Samples are small: 8 vulnerable and 11 safe cases, with 1–4 cases per class. | Wilson intervals are wide and descriptive only. |
+| One rule, `crapi-bfla-admin-delete-video`, still has a wrong probe expectation (`204` instead of the source's `404`). | It is an FN; per protocol it was not edited after the after-run verdict. |
+| DVR parser resolution still mishandles nullable `anyOf`. | `dvr-bola-profile-update` remains an engine-limitation `INC_v`. |
+| crAPI video creation is not a fixture: the engine fixture schema has no multipart body. | The owner upload is a per-reset setup object, and cleanup uses the vulnerable admin route; this is a fixture limitation. |
+| DVR caller-scope cases cannot prove a safe negative when generic overlap exists without an owner canary. | Three safe cases are `INC_s`, not TN. |
+| Business-limit and race checks remain fixture-only. | This re-run says nothing about those check types on real targets. |
+| One unscored smoke pass preceded the scored VAmPI run. | It is not included in the after counts; the scored headline starts at run 1. |

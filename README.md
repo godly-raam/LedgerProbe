@@ -20,9 +20,16 @@ Counts are `TP/FP/TN/FN/INC_vuln/INC_safe`. `INCONCLUSIVE` is never counted as c
 
 `legacy_strict` is the engine's exact-403 assertion. `legacy_lenient` is a benchmark-harness policy that passes `{401,403,404}`; it is not an engine mode. `differential` adds scoped owner/other comparison, canaries, controls, and confirmation. `crapi-order-object` is a **reduced-confidence FAIL** in v2 and v3 because its nonexistent-object control returned 500 and could not separate generic overlap from owner data. See [`docs/BENCHMARK.md`](docs/BENCHMARK.md) for the per-case table, target-mode and ground-truth columns, object-scoped cut, provenance, and determinants.
 
-### Extension validation (first run)
+### Extension evaluation
 
-The separate preregistered extension adds **19 cases across VAmPI, crAPI, and DVR**; rules were authored once from each target's docs, source, and OpenAPI and were not tuned after the run. First-run counts are **2/2/4/0/2/1/8** (`TP/FP/TN/FN/INC_vuln/INC_safe/NOT RUN`): **2 of 8** vulnerable cases were detected and **4 of 11** safe cases correctly passed. By class, **BFLA 1 of 3**, **BOLA 1 of 2**, and **mass assignment 0 of 3** documented vulnerable cases were detected. Eight cases could not run under the restore contract (four vulnerable, four safe); crAPI produced no verdicts. See [`docs/VALIDATION.md`](docs/VALIDATION.md).
+The separate preregistered extension adds **19 cases across VAmPI, crAPI, and DVR**. The first run is the pre-tuning number. Rules and the engine were then adjusted after seeing that run; the after row is a separate same-author result, not a confirmation.
+
+| Run | `TP/FP/TN/FN/INC_vuln/INC_safe/NOT RUN` | Vulnerable cases detected | Safe cases passed | NOT RUN |
+|---|---|---|---|---|
+| First run | 2/2/4/0/2/1/8 | **2 of 8** | **4 of 11** | 8 (4 vulnerable, 4 safe) |
+| After Amendments 1-2 (rules and engine adjusted after seeing the first run) | 5/0/8/1/1/3/1 | **5 of 8** | **8 of 11** | 1 (vulnerable) |
+
+The after row still has one NOT RUN: crAPI's shared-credit negative-quantity case has no exact restore or disposable object. See [`docs/VALIDATION.md`](docs/VALIDATION.md) for the per-case before/after table, Wilson intervals, determinism, and diagnoses.
 
 ## Install
 
@@ -130,8 +137,8 @@ Caller and shared scopes require declared non-empty `leak_detection.canaries`. F
 | BOLA / IDOR | Benchmarked on VAmPI and crAPI; DVR added in the extension first run. |
 | State-changing BOLA | Benchmarked on VAmPI (owner-login probe and restore) and DVR (restore). |
 | Race conditions | Fixtures only; no live VAmPI/crAPI/DVR race benchmark. |
-| BFLA | Benchmarked on DVR; the crAPI case is NOT RUN under the restore contract, and the VAmPI safe case is also NOT RUN. |
-| Mass assignment | **Experimental**; the first extension run detected 0 of 3 vulnerable cases (1 TN, 1 INC_safe, 1 NOT RUN). Requires `--experimental`. |
+| BFLA | Benchmarked on DVR and crAPI; the VAmPI safe case now runs with a disposable victim. |
+| Mass assignment | **Experimental**; the after-Amendments run detected 2 of 3 vulnerable cases, with 2 TN and 1 NOT RUN. Requires `--experimental`. |
 | Business limits | **Experimental, untested**; requires `--experimental`. |
 
 Race synchronization supports `burst`, HTTP/1.1 `last_byte`, and an optional `h2_single_packet` mode that is **not tested** because `h2` is not installed here. See [`docs/RACE.md`](docs/RACE.md) for the N=50 fixture study and honest detection rates. BFLA and the experimental checks are documented in [`docs/CHECKS_NEW.md`](docs/CHECKS_NEW.md).
@@ -152,7 +159,7 @@ See [`docs/INTEGRATIONS.md`](docs/INTEGRATIONS.md) for configuration and [`docs/
 
 ## Safety model
 
-- **Mutation gates:** mutating rules require `mutating: true`, `--allow-mutations`, a loopback or explicitly allowed host, no `--read-only`, and a `restore:` block.
+- **Mutation gates:** mutating rules require `mutating: true`, `--allow-mutations`, a loopback or explicitly allowed host, no `--read-only`, and a `restore:` block or `fixture.cleanup` for a rule-created object.
 - **Host allowlist:** target and identity hosts are checked before HTTP; redirects and automatic retries are disabled.
 - **Environment gating:** production read-only requires an explicit flag; production mutation/race is hard-blocked.
 - **Kill switch:** `--kill-file` stops before the next request, runs pending restores, skips remaining rules, writes reports, and exits 4.
