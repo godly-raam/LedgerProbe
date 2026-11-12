@@ -1,0 +1,8 @@
+{
+  "contexts": {
+    "owner": {"Authorization": "Bearer token-owner", "X-Actor": "owner"},
+    "user": {"Authorization": "Bearer token-user", "X-Actor": "user"},
+    "admin": {"Authorization": "Bearer token-admin", "X-Actor": "admin"}
+  },
+  "variables": {}
+}

@@ -568,3 +568,175 @@ mutation_idempotent_restore:
   read_only: false
   extra_args: ["--allow-mutations", "--allow-host", "authz.test"]
   description: "A detected mutation is restored before the check returns"
+
+disposable_delete_vulnerable:
+  app: disposable
+  category: vulnerable
+  expected_verdict: FAIL
+  expected_reason: state_changed_by_other
+  expected_note: null
+  rule_file: rules_delete.yaml
+  read_only: false
+  extra_args: ["--allow-mutations", "--allow-host", "disposable.test"]
+  description: "User deletes the owner's disposable fixture item"
+
+disposable_delete_fixed:
+  app: disposable
+  category: safe
+  expected_verdict: PASS
+  expected_reason: null
+  expected_note: null
+  rule_file: rules_delete.yaml
+  read_only: false
+  extra_args: ["--allow-mutations", "--allow-host", "disposable.test"]
+  description: "Forbidden delete returns 403 and the fixture item remains"
+
+disposable_delete_noop:
+  app: disposable
+  category: safe
+  expected_verdict: PASS
+  expected_reason: null
+  expected_note: no_effect
+  rule_file: rules_delete.yaml
+  read_only: false
+  extra_args: ["--allow-mutations", "--allow-host", "disposable.test"]
+  description: "Delete returns 2xx but the item still exists"
+
+disposable_create_vulnerable:
+  app: disposable
+  category: vulnerable
+  expected_verdict: FAIL
+  expected_reason: state_changed_by_other
+  expected_note: null
+  rule_file: rules_create.yaml
+  read_only: false
+  extra_args: ["--allow-mutations", "--allow-host", "disposable.test"]
+  description: "User creates an admin-only resource captured from the attack response"
+
+disposable_create_fixed:
+  app: disposable
+  category: safe
+  expected_verdict: PASS
+  expected_reason: null
+  expected_note: null
+  rule_file: rules_create.yaml
+  read_only: false
+  extra_args: ["--allow-mutations", "--allow-host", "disposable.test"]
+  description: "Creation is denied, no id is captured, cleanup is skipped"
+
+register_mass_assignment_vulnerable:
+  app: disposable
+  category: vulnerable
+  expected_verdict: FAIL
+  expected_reason: mass_assignment
+  expected_note: null
+  rule_file: rules_register.yaml
+  read_only: false
+  extra_args: ["--experimental", "--allow-mutations", "--allow-host", "disposable.test"]
+  description: "Registration persists the privileged flag"
+
+register_mass_assignment_fixed:
+  app: disposable
+  category: safe
+  expected_verdict: PASS
+  expected_reason: null
+  expected_note: ignored
+  rule_file: rules_register.yaml
+  read_only: false
+  extra_args: ["--experimental", "--allow-mutations", "--allow-host", "disposable.test"]
+  description: "Registration ignores the privileged flag and cleans up the user"
+
+fixture_creation_fails:
+  app: disposable
+  category: tricky
+  expected_verdict: ERROR
+  expected_reason: fixture_failed
+  expected_note: null
+  rule_file: rules_delete.yaml
+  read_only: false
+  expected_requests: 2
+  extra_args: ["--allow-mutations", "--allow-host", "disposable.test"]
+  description: "Fixture creation returns 500 and the attack is never sent"
+
+capture_missing:
+  app: disposable
+  category: tricky
+  expected_verdict: ERROR
+  expected_reason: capture_failed
+  expected_note: null
+  rule_file: rules_delete.yaml
+  read_only: false
+  extra_args: ["--allow-mutations", "--allow-host", "disposable.test"]
+  description: "Fixture response omits the captured id; cleanup still runs"
+
+cleanup_failure:
+  app: disposable
+  category: tricky
+  expected_verdict: ERROR
+  expected_reason: cleanup_failed
+  expected_note: null
+  rule_file: rules_delete.yaml
+  read_only: false
+  expected_exit: 2
+  extra_args: ["--allow-mutations", "--allow-host", "disposable.test"]
+  description: "Cleanup returns 500 and the later cleanup request still runs"
+
+kill_switch_during_attack:
+  app: disposable
+  category: tricky
+  expected_verdict: SKIPPED
+  expected_reason: kill_switch
+  expected_note: null
+  rule_file: rules_delete.yaml
+  read_only: false
+  expected_exit: 4
+  extra_args: ["--allow-mutations", "--allow-host", "disposable.test"]
+  description: "Kill file appears after fixture creation; attack stops and cleanup runs"
+
+blocked_without_allow_mutations:
+  app: disposable
+  category: tricky
+  expected_verdict: SKIPPED
+  expected_reason: mutation_blocked
+  expected_note: null
+  rule_file: rules_delete.yaml
+  read_only: false
+  expected_requests: 0
+  extra_args: ["--allow-host", "disposable.test"]
+  description: "Mutation gate blocks without --allow-mutations"
+
+blocked_host:
+  app: disposable
+  category: tricky
+  expected_verdict: SKIPPED
+  expected_reason: mutation_blocked
+  expected_note: null
+  rule_file: rules_delete.yaml
+  read_only: false
+  expected_requests: 0
+  extra_args: ["--allow-mutations", "--allow-host", "other.test"]
+  description: "Mutation gate blocks a non-allowlisted host"
+
+blocked_production:
+  app: disposable
+  category: tricky
+  expected_verdict: SKIPPED
+  expected_reason: mutation_blocked_production
+  expected_note: null
+  rule_file: rules_delete.yaml
+  read_only: false
+  expected_requests: 0
+  extra_args: ["--environment", "production", "--allow-mutations", "--allow-host", "disposable.test"]
+  description: "Production hard-block prevents fixture traffic"
+
+blocked_read_only:
+  app: disposable
+  category: tricky
+  expected_verdict: SKIPPED
+  expected_reason: mutation_blocked
+  expected_note: null
+  rule_file: rules_delete.yaml
+  read_only: true
+  expected_requests: 0
+  extra_args: ["--allow-mutations", "--allow-host", "disposable.test"]
+  description: "Read-only mode blocks fixture traffic"

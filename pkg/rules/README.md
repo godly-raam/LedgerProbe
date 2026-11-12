@@ -223,6 +223,67 @@ vulnerability findings. Results contain no expanded URLs, request headers,
 input values, exception text or response bodies. Rules' own metadata is returned
 unchanged, so do not place secrets in metadata.
 
+## Disposable fixtures
+
+Mutating rules may create their own disposable object instead of restoring an
+existing one. These fields are strict: unknown keys, duplicate capture names,
+unknown status codes and unresolved `when_defined` references are rejected at
+load time.
+
+```yaml
+fixture:
+  create:
+    - identity: owner
+      request:
+        method: POST
+        path: /api/v1/items
+        body: {name: "{{gen.item_name}}"}
+      capture:
+        - {name: id, from: json, path: id}
+      expect_status: [200, 201]
+  cleanup:
+    - identity: owner
+      when_defined: fixture.id
+      request:
+        method: DELETE
+        path: /api/v1/items/{{fixture.id}}
+      ok_status: [200, 202, 204, 404]
+capture:
+  - {name: id, from: json, path: id}
+variables:
+  generated:
+    - {name: item_name, pattern: "lp_{rand10}"}
+```
+
+`fixture.create` and `fixture.cleanup` are ordered lists. A create step uses a
+named authentication context as `identity`; its `expect_status` defaults to any
+2xx. A cleanup step defaults to `[200, 202, 204, 404]` and is skipped when its
+`when_defined` variable was not captured. Cleanup always runs after an attempted
+fixture creation, including after capture failure, an attack failure, or a kill
+switch; cleanup requests bypass only the kill-switch check so they can remove
+the disposable object. The remaining cleanup steps still run after one fails.
+
+`capture` may also appear on the attack request. Captured values are available
+as `{{fixture.<name>}}` in the attack, verify and cleanup requests. Generated
+values are available as `{{gen.<name>}}` in the same places. `variables.generated`
+patterns must start with `lp_` and use `{randN}` (N from 1 to 64) for lowercase
+alphanumeric randomness; the `lp_` prefix lets operators find leftovers.
+
+A mutating rule must still declare `restore:` when it changes pre-existing
+state. `fixture.cleanup` satisfies the restore requirement only for objects
+created by that rule's own fixture or attack; it does not authorize mutating
+someone else's object. Every fixture, attack and verify request passes the
+normal mutation gates: `--allow-mutations`, `--allow-host`, non-read-only mode,
+the production hard block, the kill switch, `GuardedClient`, and scan headers.
+Cleanup passes the same gates except that it is allowed to finish after a kill.
+
+Fixture failures produce `ERROR fixture_failed` and the attack is never sent.
+A missing capture path or header produces `ERROR capture_failed`; cleanup still
+runs. Cleanup rejection or timeout produces `ERROR cleanup_failed` (exit code 2)
+with only the rule ID in the message. Captured and generated values are never
+written to results, SARIF, JUnit, tickets, DefectDojo, JSON logs, metrics or the
+GitHub summary.
+
 ## Differential ABAC isolation extension
 
 The rules above are the **legacy assertion schema**. A status-only rule remains

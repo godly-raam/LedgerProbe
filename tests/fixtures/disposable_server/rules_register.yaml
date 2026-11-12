@@ -1,0 +1,45 @@
+id: disposable-register-admin
+name: Registration must ignore privileged fields
+severity: high
+owasp_category: API3:2023
+cvss_score: 8.1
+target_endpoints:
+  - path: /api/v1/users
+    method: POST
+auth_contexts:
+  primary: admin
+  forbidden: user
+check: mass_assignment
+mutating: true
+request:
+  method: POST
+  path: /api/v1/users
+  body:
+    name: "{{gen.user_name}}"
+inject:
+  - name: is_admin
+    type: boolean
+    values: [true]
+max_attempts: 1
+capture:
+  - name: id
+    from: json
+    path: id
+readback:
+  request:
+    method: GET
+    path: /api/v1/users/{{fixture.id}}
+    auth: admin
+  paths:
+    is_admin: is_admin
+fixture:
+  cleanup:
+    - identity: admin
+      when_defined: fixture.id
+      request:
+        method: DELETE
+        path: /api/v1/users/{{fixture.id}}
+variables:
+  generated:
+    - name: user_name
+      pattern: "lp_{rand10}"

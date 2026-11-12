@@ -9,6 +9,7 @@ import json
 import math
 import re
 import secrets
+import string
 import uuid
 from collections.abc import Iterable
 from pathlib import Path
@@ -162,6 +163,123 @@ def _verify_spec(value):
             raise ValueError("state_diff verification has unknown fields")
 
 
+_CAPTURE_NAME = re.compile(r"[a-z][a-z0-9_]{0,63}")
+
+
+def _captures(value):
+    if not isinstance(value, list) or not value:
+        raise ValueError("capture must be a nonempty list")
+    names = set()
+    for item in value:
+        _keys(item, {"name", "from", "path"}, {"name", "from", "path"})
+        name = item["name"]
+        if not isinstance(name, str) or not _CAPTURE_NAME.fullmatch(name):
+            raise ValueError("capture.name must be a lowercase identifier")
+        if name in names:
+            raise ValueError("capture names must be unique")
+        names.add(name)
+        if item["from"] not in {"json", "header"}:
+            raise ValueError("capture.from must be json or header")
+        if not isinstance(item["path"], str) or not item["path"].strip():
+            raise ValueError("capture.path must be a nonempty string")
+    return names
+
+
+def _fixture_request(value):
+    _keys(value, {"method", "path", "body", "headers"}, {"method", "path"})
+    if not isinstance(value["method"], str) or value["method"] not in _METHODS:
+        raise ValueError("Fixture request methods must be uppercase HTTP methods")
+    _path(value["path"])
+    if "body" in value:
+        _json(value["body"])
+    headers = value.get("headers", {})
+    if not isinstance(headers, dict):
+        raise ValueError("Fixture request headers must be a mapping")
+    for name, header in headers.items():
+        if (not isinstance(name, str)
+                or not re.fullmatch(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+", name)
+                or name.lower() in {"authorization", "proxy-authorization", "cookie", "host"}
+                or not isinstance(header, (str, int, float, bool))
+                or any(char in str(header) for char in "\r\n")):
+            raise ValueError("Invalid fixture request header")
+
+
+def _statuses(value, label):
+    if (not isinstance(value, list) or not value
+            or any(type(status) is not int or not 100 <= status <= 599 for status in value)
+            or len(set(value)) != len(value)):
+        raise ValueError(f"{label} must be a unique nonempty list of HTTP statuses")
+    return set(value)
+
+
+def _fixture_spec(value):
+    _keys(value, {"create", "cleanup"})
+    if not value:
+        raise ValueError("fixture must declare create or cleanup")
+    captures = set()
+    if "create" in value:
+        steps = value["create"]
+        if not isinstance(steps, list) or not steps:
+            raise ValueError("fixture.create must be a nonempty ordered list")
+        for step in steps:
+            _keys(step, {"identity", "request", "capture", "expect_status"},
+                  {"identity", "request"})
+            if not isinstance(step["identity"], str) or not step["identity"]:
+                raise ValueError("fixture.create identity must be a nonempty string")
+            _fixture_request(step["request"])
+            if "capture" in step:
+                new_captures = _captures(step["capture"])
+                if captures & new_captures:
+                    raise ValueError("fixture capture names must be unique")
+                captures |= new_captures
+            if "expect_status" in step:
+                _statuses(step["expect_status"], "fixture.create expect_status")
+    if "cleanup" in value:
+        steps = value["cleanup"]
+        if not isinstance(steps, list) or not steps:
+            raise ValueError("fixture.cleanup must be a nonempty ordered list")
+        for step in steps:
+            _keys(step, {"identity", "request", "when_defined", "ok_status"},
+                  {"identity", "request"})
+            if not isinstance(step["identity"], str) or not step["identity"]:
+                raise ValueError("fixture.cleanup identity must be a nonempty string")
+            _fixture_request(step["request"])
+            if "when_defined" in step:
+                name = step["when_defined"]
+                if not isinstance(name, str) or not name.startswith("fixture."):
+                    raise ValueError("when_defined must name fixture.<capture>")
+            if "ok_status" in step:
+                _statuses(step["ok_status"], "fixture.cleanup ok_status")
+    return captures
+
+
+def _generated_spec(value):
+    _keys(value, {"generated"}, {"generated"})
+    generated = value["generated"]
+    if not isinstance(generated, list) or not generated:
+        raise ValueError("variables.generated must be a nonempty list")
+    names = set()
+    for item in generated:
+        _keys(item, {"name", "pattern"}, {"name", "pattern"})
+        name = item["name"]
+        if not isinstance(name, str) or not _CAPTURE_NAME.fullmatch(name):
+            raise ValueError("variables.generated name must be a lowercase identifier")
+        if name in names:
+            raise ValueError("variables.generated names must be unique")
+        names.add(name)
+        pattern = item["pattern"]
+        if (not isinstance(pattern, str) or not pattern.startswith("lp_")
+                or not re.fullmatch(r"lp_[a-z0-9_{}]+", pattern)
+                or not re.search(r"\{rand\d{1,2}\}", pattern)):
+            raise ValueError("generated patterns must start with lp_ and contain {randN}")
+        if re.search(r"[{}]", re.sub(r"\{rand\d{1,2}\}", "", pattern)):
+            raise ValueError("generated patterns only support {randN} placeholders")
+        for token in re.findall(r"\{rand(\d{1,2})\}", pattern):
+            if not 1 <= int(token) <= 64:
+                raise ValueError("generated rand length must be 1..64")
+    return names
+
+
 def _race_spec(value):
     _keys(value, {"requests", "rounds", "sync", "identity", "reset", "success_status",
                   "idempotency", "max_spread_ms", "invariant"},
@@ -239,7 +357,8 @@ def _validate_rules(rules, *, require_mutating=True, accept_generated=False, exp
                      "mutating", "verify", "restore", "race", "remediation",
                      "check", "privileged", "unprivileged", "request", "inject",
                      "readback", "ledger", "limits", "cases", "_case", "max_attempts",
-                     "generated_from", "review_required", "scope_confidence", "disabled"},
+                     "generated_from", "review_required", "scope_confidence", "disabled",
+                     "fixture", "capture", "variables"},
               {"id", "name", "severity", "owasp_category", "cvss_score", "target_endpoints"})
         if "generated_from" in rule and rule["generated_from"] not in {"har", "postman", "mitm"}:
             raise ValueError("generated_from must be har, postman or mitm")
@@ -258,8 +377,20 @@ def _validate_rules(rules, *, require_mutating=True, accept_generated=False, exp
             raise ValueError("check must be bfla, mass_assignment or business_limit")
         if rule.get("check") in {"mass_assignment", "business_limit"} and not experimental:
             raise ValueError(f"check type {rule['check']} is not yet validated; rerun with --experimental")
-        if rule.get("check") in {"mass_assignment", "business_limit"} and "restore" not in rule:
-            raise ValueError(f"{rule['check']} requires restore")
+        fixture_captures = _fixture_spec(rule["fixture"]) if "fixture" in rule else set()
+        attack_captures = _captures(rule["capture"]) if "capture" in rule else set()
+        if fixture_captures & attack_captures:
+            raise ValueError("capture names must be unique across fixture and attack")
+        if "variables" in rule:
+            _generated_spec(rule["variables"])
+        for step in rule.get("fixture", {}).get("cleanup", []):
+            if "when_defined" in step:
+                name = step["when_defined"].split(".", 1)[1]
+                if name not in fixture_captures | attack_captures:
+                    raise ValueError("when_defined must reference a declared capture")
+        has_cleanup = bool(rule.get("fixture", {}).get("cleanup"))
+        if rule.get("check") in {"mass_assignment", "business_limit"} and "restore" not in rule and not has_cleanup:
+            raise ValueError(f"{rule['check']} requires restore or fixture.cleanup")
         if rule.get("check") == "mass_assignment":
             if not isinstance(rule.get("request"), dict) or not isinstance(rule.get("readback"), dict):
                 raise ValueError("mass_assignment requires request and readback mappings")
@@ -349,21 +480,22 @@ def _validate_rules(rules, *, require_mutating=True, accept_generated=False, exp
         if mutating:
             if "assertions" in rule:
                 raise ValueError("Mutating rules must use verify, not assertions")
-            if "restore" not in rule:
-                raise ValueError("Mutating rules require restore")
+            if "restore" not in rule and not rule.get("fixture", {}).get("cleanup"):
+                raise ValueError("Mutating rules require restore or fixture.cleanup")
             if "verify" in rule:
                 _verify_spec(rule["verify"])
             if "race" in rule:
                 if "verify" in rule:
                     raise ValueError("Race rules must use race, not verify")
                 _race_spec(rule["race"])
-            restore = rule["restore"]
-            if not isinstance(restore, list) or not restore:
-                raise ValueError("restore must be a nonempty list")
-            for request in restore:
-                if not isinstance(request, dict):
-                    raise ValueError("restore entries must be mappings")
-                _request_spec(request)
+            if "restore" in rule:
+                restore = rule["restore"]
+                if not isinstance(restore, list) or not restore:
+                    raise ValueError("restore must be a nonempty list")
+                for request in restore:
+                    if not isinstance(request, dict):
+                        raise ValueError("restore entries must be mappings")
+                    _request_spec(request)
             confirm = rule.get("confirm", 1)
             if type(confirm) is not int or not 0 <= confirm <= 1:
                 raise ValueError("Mutating confirm must be 0 or 1")
@@ -727,8 +859,9 @@ class _Runtime:
         except Exception:
             raise _Stop("HTTP request failed.", "error", "execution_error") from None
 
-    async def custom_request(self, spec, variables, primary=None, forbidden=None):
-        """Execute a validated restore/verify request without trusting the spec."""
+    async def custom_request(self, spec, variables, primary=None, forbidden=None,
+                             extra_headers=None, cleanup=False):
+        """Execute a validated restore/verify/fixture request without trusting the spec."""
         role = spec.get("auth", "primary")
         if role == "none":
             context = None
@@ -751,6 +884,14 @@ class _Runtime:
         if "{{" in path or "}}" in path:
             raise _Stop("Malformed mutation request path parameter.", "error", "execution_error")
         headers = {key.lower(): value for key, value in self.headers(context).items()}
+        expanded_headers = _expand(extra_headers or {}, variables)
+        if not isinstance(expanded_headers, dict):
+            raise _Stop("Mutation request headers are invalid.", "error", "execution_error")
+        if any(value is None or isinstance(value, (dict, list))
+               for value in expanded_headers.values()):
+            raise _Stop("Mutation request headers are invalid.", "error", "execution_error")
+        headers.update({str(key).lower(): str(value)
+                        for key, value in expanded_headers.items()})
         headers.setdefault("cookie", "")
         query = _expand(spec.get("query", {}), variables)
         if not isinstance(query, dict):
@@ -764,15 +905,17 @@ class _Runtime:
                 await self.auth.ensure(context)
                 headers.update({key.lower(): value for key, value in self.headers(context).items()})
                 kwargs["headers"] = headers
-            response = await self.client.request(spec["method"], url, **kwargs)
+            response = await self.client.request(spec["method"], url, cleanup=cleanup, **kwargs)
             if (self.auth is not None and response.status_code == 401
                     and self.auth.can_refresh_on_401(context)):
                 await self.auth.refresh(context)
                 headers.update({key.lower(): value for key, value in self.headers(context).items()})
                 kwargs["headers"] = headers
-                response = await self.client.request(spec["method"], url, **kwargs)
+                response = await self.client.request(spec["method"], url, cleanup=cleanup, **kwargs)
                 self.notes.add("auth_refreshed")
             return response
+        except KillSwitch:
+            raise _Stop("Kill switch is active.", "skipped", "kill_switch") from None
         except UnsafeRequest:
             raise _Stop("Mutation request blocked by the safety guard.", "skipped", "safety_blocked") from None
         except httpx.TimeoutException:
@@ -1126,6 +1269,78 @@ async def _restore_mutation(runtime, rule, variables, primary, forbidden):
                         "error", "restore_failed")
 
 
+def _generated_values(rule: dict) -> dict:
+    values = {}
+    for item in rule.get("variables", {}).get("generated", []):
+        def replace(match):
+            length = int(match.group(1))
+            return "".join(secrets.choice(string.ascii_lowercase + string.digits)
+                           for _ in range(length))
+        values[item["name"]] = re.sub(r"\{rand(\d{1,2})\}", replace, item["pattern"])
+    return values
+
+
+def _capture_response(captures, response, namespace: dict, rule_id: str) -> None:
+    for item in captures:
+        if item["from"] == "header":
+            headers = {name.lower(): value for name, value in response.headers.items()}
+            value = headers.get(item["path"].lower(), _MISSING)
+        else:
+            try:
+                payload = response.json()
+            except (ValueError, TypeError):
+                value = _MISSING
+            else:
+                value = _lookup(payload, item["path"])
+        if value is _MISSING:
+            raise _Stop(f"Capture failed for rule '{rule_id}'.", "error", "capture_failed")
+        namespace[item["name"]] = copy.deepcopy(value)
+
+
+async def _fixture_create(runtime, rule: dict) -> None:
+    for step in rule.get("fixture", {}).get("create", []):
+        request = dict(step["request"])
+        request["auth"] = step["identity"]
+        extra_headers = request.pop("headers", {})
+        try:
+            response = await runtime.custom_request(
+                request, runtime.variables, extra_headers=extra_headers)
+        except _Stop as exc:
+            if exc.status == "skipped":
+                raise
+            raise _Stop(f"Fixture creation failed for rule '{rule['id']}'.",
+                        "error", "fixture_failed") from None
+        expected = step.get("expect_status")
+        accepted = response.status_code in expected if expected else 200 <= response.status_code < 300
+        if not accepted:
+            raise _Stop(f"Fixture creation failed for rule '{rule['id']}'.",
+                        "error", "fixture_failed")
+        if "capture" in step:
+            _capture_response(step["capture"], response,
+                              runtime.variables["fixture"], rule["id"])
+
+
+async def _fixture_cleanup(runtime, rule: dict) -> None:
+    failed = False
+    for step in rule.get("fixture", {}).get("cleanup", []):
+        if "when_defined" in step and _lookup(runtime.variables, step["when_defined"]) is _MISSING:
+            continue
+        request = dict(step["request"])
+        request["auth"] = step["identity"]
+        extra_headers = request.pop("headers", {})
+        try:
+            response = await runtime.custom_request(
+                request, runtime.variables, extra_headers=extra_headers, cleanup=True)
+        except _Stop:
+            failed = True
+            continue
+        if response.status_code not in set(step.get("ok_status", [200, 202, 204, 404])):
+            failed = True
+    if failed:
+        raise _Stop(f"Fixture cleanup failed for rule '{rule['id']}'.",
+                    "error", "cleanup_failed")
+
+
 MASS_ASSIGNMENT_FIELDS = (
     "role", "roles", "is_admin", "admin", "is_staff", "balance", "limit",
     "status", "verified", "kyc_status", "plan", "owner_id", "user_id", "account_id",
@@ -1184,14 +1399,18 @@ def _mass_candidates(item, before_payload, schema):
     return name, kind, ["lp-marker-" + secrets.token_hex(12)]
 
 
-async def _execute_mass_assignment(runtime, endpoint, rule, variables, primary, forbidden):
+async def _execute_mass_assignment(runtime, endpoint, rule, variables, primary, forbidden,
+                                   captures=None):
     readback = rule["readback"]
     snapshot_request = readback.get("request", readback)
     try:
         before_response = await runtime.custom_request(snapshot_request, variables, primary, forbidden)
         before_payload = before_response.json()
     except (_Stop, ValueError, TypeError):
-        raise _Stop("Mass-assignment readback was unavailable.", "inconclusive", "unverified_mutation")
+        if "{{fixture." in json.dumps(snapshot_request):
+            before_payload = {}
+        else:
+            raise _Stop("Mass-assignment readback was unavailable.", "inconclusive", "unverified_mutation")
     request = copy.deepcopy(rule["request"])
     base_body = copy.deepcopy(request.get("body", {}))
     body_content = (endpoint.get("request_body") or {}).get("content", {})
@@ -1222,6 +1441,8 @@ async def _execute_mass_assignment(runtime, endpoint, rule, variables, primary, 
             response = await runtime.custom_request(request, variables, primary, forbidden)
             status = response.status_code
             if 200 <= status < 300:
+                if captures:
+                    _capture_response(captures, response, variables["fixture"], rule["id"])
                 try:
                     after_response = await runtime.custom_request(
                         snapshot_request, variables, primary, forbidden)
@@ -1236,7 +1457,8 @@ async def _execute_mass_assignment(runtime, endpoint, rule, variables, primary, 
                                        if isinstance(readback.get("paths"), dict) else name)
                          for name in fields}
         finally:
-            await _restore_mutation(runtime, rule, variables, primary, forbidden)
+            if rule.get("restore"):
+                await _restore_mutation(runtime, rule, variables, primary, forbidden)
         if 200 <= (status or 0) < 300 and any(after.get(name) == markers[name] for name in fields):
             break
         if 400 <= (status or 0) < 500:
@@ -1306,7 +1528,7 @@ async def _execute_business_limit(runtime, rule, variables, primary, forbidden):
             after = None
     finally:
         runtime.variables = previous
-        if attempted:
+        if attempted and rule.get("restore"):
             await _restore_mutation(runtime, rule, variables, primary, forbidden)
     if type(after) not in (int, float) or isinstance(after, bool):
         return {"status": "inconclusive", "verdict": "INCONCLUSIVE", "confidence": "reduced",
@@ -1328,7 +1550,8 @@ async def _execute_business_limit(runtime, rule, variables, primary, forbidden):
             "evidence": evidence}
 
 
-async def _execute_mutation(runtime, endpoint, inputs, forbidden, rule, variables, marker):
+async def _execute_mutation(runtime, endpoint, inputs, forbidden, rule, variables, marker,
+                            captures=None):
     verify = rule.get("verify")
     before_hash = None
     if verify and verify["mode"] == "state_diff":
@@ -1359,6 +1582,8 @@ async def _execute_mutation(runtime, endpoint, inputs, forbidden, rule, variable
                 error = exc
         if mutation is None and error is None:
             mutation = _response_record(response)
+            if captures and 200 <= mutation.get("status", 0) < 300:
+                _capture_response(captures, response, variables["fixture"], rule["id"])
             if verify and 200 <= mutation.get("status", 0) < 300:
                 verification = await _verify_mutation(
                     runtime, verify, variables, marker,
@@ -1370,8 +1595,9 @@ async def _execute_mutation(runtime, endpoint, inputs, forbidden, rule, variable
         restore_error = None
         if attempted:
             try:
-                await _restore_mutation(runtime, rule, variables,
-                                        rule["auth_contexts"]["primary"], forbidden)
+                if rule.get("restore"):
+                    await _restore_mutation(runtime, rule, variables,
+                                            rule["auth_contexts"]["primary"], forbidden)
             except _Stop as exc:
                 restore_error = exc
         if restore_error is not None:
@@ -1814,32 +2040,53 @@ async def run_rules(inventory: dict, rules: list[dict], client,
                                                      inventory["base_url"])
                     if missing:
                         raise _Stop(f"Mutation blocked: {missing}.", "skipped", "mutation_blocked")
-                    if rule.get("check") == "mass_assignment":
-                        result.update(await _execute_mass_assignment(
-                            runtime, endpoint, rule, runtime.variables, primary, forbidden))
-                        results.append(result)
-                        continue
-                    if rule.get("check") == "business_limit":
-                        result.update(await _execute_business_limit(
-                            runtime, rule, runtime.variables, primary, forbidden))
-                        results.append(result)
-                        continue
-                    if "race" in rule:
-                        result.update(await _execute_race(runtime, endpoint, rule,
-                                                          runtime.variables, client, allowed_hosts))
-                        results.append(result)
-                        continue
-                    marker = secrets.token_urlsafe(24)
-                    original_variables = runtime.variables
-                    runtime.variables = {**original_variables, "marker": marker}
+                    fixture = rule.get("fixture")
+                    captures = rule.get("capture")
+                    outer_variables = runtime.variables
+                    handled = False
                     try:
-                        inputs = await runtime.inputs(endpoint, rule, primary, (op,) if op else (), [0])
-                        result.update(await _execute_mutation(runtime, endpoint, inputs, forbidden,
-                                                              rule, runtime.variables, marker))
+                        if fixture or captures:
+                            runtime.variables = {**outer_variables,
+                                                 "gen": _generated_values(rule),
+                                                 "fixture": {}}
+                        if fixture:
+                            await _fixture_create(runtime, rule)
+                        if rule.get("check") == "mass_assignment":
+                            result.update(await _execute_mass_assignment(
+                                runtime, endpoint, rule, runtime.variables, primary, forbidden,
+                                captures=captures))
+                            handled = True
+                            continue
+                        if rule.get("check") == "business_limit":
+                            result.update(await _execute_business_limit(
+                                runtime, rule, runtime.variables, primary, forbidden))
+                            handled = True
+                            continue
+                        if "race" in rule:
+                            result.update(await _execute_race(runtime, endpoint, rule,
+                                                              runtime.variables, client, allowed_hosts))
+                            handled = True
+                            continue
+                        marker = secrets.token_urlsafe(24)
+                        original_variables = runtime.variables
+                        runtime.variables = {**original_variables, "marker": marker}
+                        try:
+                            inputs = await runtime.inputs(endpoint, rule, primary, (op,) if op else (), [0])
+                            result.update(await _execute_mutation(
+                                runtime, endpoint, inputs, forbidden, rule,
+                                runtime.variables, marker, captures=captures))
+                        finally:
+                            runtime.variables = original_variables
+                        handled = True
+                        continue
                     finally:
-                        runtime.variables = original_variables
-                    results.append(result)
-                    continue
+                        try:
+                            if fixture:
+                                await _fixture_cleanup(runtime, rule)
+                            if handled:
+                                results.append(result)
+                        finally:
+                            runtime.variables = outer_variables
                 inputs = await runtime.inputs(endpoint, rule, primary, (op,) if op else (), [0])
                 pagination = rule.get("pagination")
                 if pagination:
@@ -1911,6 +2158,7 @@ async def run_rules(inventory: dict, rules: list[dict], client,
                     if not passed:
                         result.update(reason="assertion_failed", verdict="FAIL")
             except _Stop as exc:
+                result.pop("note", None)
                 result.update(status=exc.status, message=exc.message,
                               verdict={"error": "ERROR", "skipped": "SKIPPED", "inconclusive": "INCONCLUSIVE"}[exc.status])
                 result["reason"] = exc.reason or "execution_error"

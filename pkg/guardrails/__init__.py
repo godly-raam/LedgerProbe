@@ -215,7 +215,8 @@ class GuardedClient:
         return min(60.0, max(0.0, delay))
 
     async def request(self, method: str, url, **kwargs) -> httpx.Response:
-        if self._kill_file and os.path.exists(self._kill_file):
+        cleanup = kwargs.pop("cleanup", False)
+        if self._kill_file and os.path.exists(self._kill_file) and not cleanup:
             raise KillSwitch("kill switch is active")
         follow = kwargs.pop("follow_redirects", False)
         if follow not in (False, httpx.USE_CLIENT_DEFAULT):

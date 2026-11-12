@@ -1,0 +1,43 @@
+{
+  "openapi": "3.0.3",
+  "info": {"title": "LedgerProbe disposable fixture API", "version": "1.0.0"},
+  "servers": [{"url": "http://disposable.test"}],
+  "paths": {
+    "/api/v1/items": {
+      "post": {
+        "operationId": "createItem",
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"type": "object", "required": ["name"], "properties": {"name": {"type": "string"}}}}}},
+        "responses": {"201": {"description": "Created"}, "403": {"description": "Forbidden"}, "500": {"description": "Fixture failure"}}
+      }
+    },
+    "/api/v1/items/{id}": {
+      "get": {"operationId": "getItem", "parameters": [{"name": "id", "in": "path", "required": true, "schema": {"type": "string"}}], "responses": {"200": {"description": "Item"}, "404": {"description": "Missing"}}},
+      "delete": {"operationId": "deleteItem", "parameters": [{"name": "id", "in": "path", "required": true, "schema": {"type": "string"}}], "responses": {"200": {"description": "Deleted"}, "403": {"description": "Forbidden"}, "404": {"description": "Missing"}}}
+    },
+    "/api/v1/admin/resources": {
+      "post": {
+        "operationId": "createAdminResource",
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"type": "object", "required": ["name"], "properties": {"name": {"type": "string"}}}}}},
+        "responses": {"201": {"description": "Created"}, "403": {"description": "Forbidden"}}
+      }
+    },
+    "/api/v1/admin/resources/{id}": {
+      "get": {"operationId": "getAdminResource", "parameters": [{"name": "id", "in": "path", "required": true, "schema": {"type": "string"}}], "responses": {"200": {"description": "Resource"}, "403": {"description": "Forbidden"}, "404": {"description": "Missing"}}},
+      "delete": {"operationId": "deleteAdminResource", "parameters": [{"name": "id", "in": "path", "required": true, "schema": {"type": "string"}}], "responses": {"200": {"description": "Deleted"}, "403": {"description": "Forbidden"}, "404": {"description": "Missing"}}}
+    },
+    "/api/v1/users": {
+      "post": {
+        "operationId": "registerUser",
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"type": "object", "required": ["name"], "properties": {"name": {"type": "string"}, "is_admin": {"type": "boolean"}}}}}},
+        "responses": {"201": {"description": "Created"}, "401": {"description": "Unauthorized"}}
+      }
+    },
+    "/api/v1/users/{id}": {
+      "get": {"operationId": "getUser", "parameters": [{"name": "id", "in": "path", "required": true, "schema": {"type": "string"}}], "responses": {"200": {"description": "User"}, "403": {"description": "Forbidden"}, "404": {"description": "Missing"}}},
+      "delete": {"operationId": "deleteUser", "parameters": [{"name": "id", "in": "path", "required": true, "schema": {"type": "string"}}], "responses": {"200": {"description": "Deleted"}, "403": {"description": "Forbidden"}, "404": {"description": "Missing"}}}
+    },
+    "/api/v1/health": {
+      "get": {"operationId": "health", "responses": {"200": {"description": "Healthy"}}}
+    }
+  }
+}

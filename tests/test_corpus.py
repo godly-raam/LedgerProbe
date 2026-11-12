@@ -20,6 +20,12 @@ from tests.fixtures.authz_server import (
     create_app,
     load_expectations,
 )
+from tests.fixtures.disposable_server import (
+    FIXTURES_DIR as DISPOSABLE_DIR,
+    INPUTS_PATH as DISPOSABLE_INPUTS,
+    SPEC_PATH as DISPOSABLE_SPEC,
+    create_app as create_disposable_app,
+)
 
 EXPECTATIONS = load_expectations()
 
@@ -27,12 +33,20 @@ EXPECTATIONS = load_expectations()
 async def execute_profile(profile_name: str, tmp_path: Path, app=None) -> tuple[int, dict, Path, Path]:
     """Execute a single profile end-to-end through the real CLI path against the fixture server."""
     profile_spec = EXPECTATIONS[profile_name]
-    rule_file = FIXTURES_DIR / profile_spec["rule_file"]
+    disposable = profile_spec.get("app") == "disposable"
+    rules_dir = DISPOSABLE_DIR if disposable else FIXTURES_DIR
+    rule_file = rules_dir / profile_spec["rule_file"]
+    spec_path = DISPOSABLE_SPEC if disposable else SPEC_PATH
+    inputs_path = DISPOSABLE_INPUTS if disposable else INPUTS_PATH
+    base_url = "http://disposable.test" if disposable else "http://authz.test"
     sarif_path = tmp_path / "results.sarif"
     junit_path = tmp_path / "results.xml"
 
     if app is None:
-        app = create_app(profile=profile_name, timeout_delay=0.15)
+        if disposable:
+            app = create_disposable_app(profile=profile_name, kill_file=tmp_path / "kill")
+        else:
+            app = create_app(profile=profile_name, timeout_delay=0.15)
     transport = TimingOutASGITransport(app=app)
 
     def client_factory(**kwargs):
@@ -42,10 +56,10 @@ async def execute_profile(profile_name: str, tmp_path: Path, app=None) -> tuple[
 
     cli_timeout = 0.05 if profile_name in {"slow_timeout", "control_timeout"} else 5.0
     cli_args = [
-        "--spec", str(SPEC_PATH),
-        "--base-url", "http://authz.test",
+        "--spec", str(spec_path),
+        "--base-url", base_url,
         "--rules", str(rule_file),
-        "--inputs", str(INPUTS_PATH),
+        "--inputs", str(inputs_path),
         "--timeout", str(cli_timeout),
         "--sarif", str(sarif_path),
         "--junit", str(junit_path),
@@ -55,6 +69,8 @@ async def execute_profile(profile_name: str, tmp_path: Path, app=None) -> tuple[
     cli_args.extend(profile_spec.get("extra_args", []))
     if profile_spec.get("spec_check"):
         cli_args.extend(["--spec-check", profile_spec["spec_check"]])
+    if profile_name == "kill_switch_during_attack":
+        cli_args.extend(["--kill-file", str(tmp_path / "kill")])
     args = ledgerprobe.arguments(cli_args)
 
     observed = []
@@ -72,6 +88,10 @@ async def execute_profile(profile_name: str, tmp_path: Path, app=None) -> tuple[
     expected = profile_spec.get("expected_findings", 1)
     assert len(observed) == expected, (
         f"Expected {expected} finding result(s) for profile {profile_name}, got {len(observed)}")
+    if "expected_requests" in profile_spec:
+        assert len(app.state.disposable.requests) == profile_spec["expected_requests"], (
+            f"Profile {profile_name}: expected {profile_spec['expected_requests']} fixture requests, "
+            f"got {app.state.disposable.requests}")
     return exit_code, observed[0] if expected == 1 else observed, sarif_path, junit_path
 
 
@@ -105,7 +125,11 @@ def test_corpus_profile(profile_name: str, profile_spec: dict, tmp_path: Path):
         )
 
     # Validate CLI exit code contracts
-    if expected_verdict == "FAIL":
+    if "expected_exit" in profile_spec:
+        assert exit_code == profile_spec["expected_exit"], (
+            f"Profile {profile_name}: expected exit {profile_spec['expected_exit']}, got {exit_code}"
+        )
+    elif expected_verdict == "FAIL":
         assert exit_code == 1, f"Profile {profile_name} expected exit code 1 on FAIL, got {exit_code}"
     elif expected_verdict == "PASS":
         assert exit_code == 0, f"Profile {profile_name} expected exit code 0 on PASS, got {exit_code}"
@@ -115,11 +139,6 @@ def test_corpus_profile(profile_name: str, profile_spec: dict, tmp_path: Path):
         assert exit_code == 2, f"Profile {profile_name} expected exit code 2 on SKIPPED, got {exit_code}"
     elif expected_verdict == "ERROR":
         assert exit_code == 2, f"Profile {profile_name} expected exit code 2 on ERROR, got {exit_code}"
-    if "expected_exit" in profile_spec:
-        assert exit_code == profile_spec["expected_exit"], (
-            f"Profile {profile_name}: expected exit {profile_spec['expected_exit']}, got {exit_code}"
-        )
-
     # Ensure sensitive canaries and context credentials are never leaked into reports
     sarif_content = sarif_path.read_text(encoding="utf-8")
     junit_content = junit_path.read_text(encoding="utf-8")

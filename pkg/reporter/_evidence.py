@@ -10,7 +10,8 @@ _REASONS = {"unauthenticated_leak", "leak_detected", "assertion_failed", "baseli
             "weak_synchronization", "reset_failed", "overlap_without_canary",
             "kill_switch", "mutation_blocked_production", "rule_disabled",
             "baseline_unauthorized", "ledger_unavailable", "limit_bypass",
-            "mass_assignment", "state_changed_despite_reject", "auth_failed",
+            "mass_assignment", "state_changed_despite_reject", "fixture_failed",
+            "capture_failed", "cleanup_failed", "auth_failed",
             "auth_host_not_allowed", "auth_identity_unknown", "inline_credential",
             "invalid_auth_config", "invalid_secret_ref", "secret_file_permissions",
             "secret_unavailable"}

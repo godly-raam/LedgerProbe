@@ -1,0 +1,36 @@
+id: disposable-create
+name: A user must not create an admin-only resource
+severity: high
+owasp_category: API5:2023
+cvss_score: 8.1
+target_endpoints:
+  - path: /api/v1/admin/resources
+    method: POST
+auth_contexts:
+  primary: admin
+  forbidden: user
+body:
+  name: "{{gen.resource_name}}"
+mutating: true
+capture:
+  - name: id
+    from: json
+    path: id
+fixture:
+  cleanup:
+    - identity: admin
+      when_defined: fixture.id
+      request:
+        method: DELETE
+        path: /api/v1/admin/resources/{{fixture.id}}
+verify:
+  mode: probe
+  request:
+    method: GET
+    path: /api/v1/admin/resources/{{fixture.id}}
+    auth: primary
+  expected_status: 200
+variables:
+  generated:
+    - name: resource_name
+      pattern: "lp_{rand10}"
