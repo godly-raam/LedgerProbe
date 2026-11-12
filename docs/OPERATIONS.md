@@ -54,6 +54,19 @@ are written, and the process exits **4**. Remove the file before the next run.
 Deleting the run's process is a last resort because it can strand mutated test
 state.
 
+## Disposable fixtures
+
+Rules can create their own test object and remove it in `fixture.cleanup`
+instead of restoring pre-existing state. Every fixture create, attack and verify
+request still requires `--allow-mutations`, an allowed host, non-read-only mode,
+and a non-production environment. Cleanup runs in a `finally` path, including
+after a kill switch, capture failure, or attack failure; cleanup alone is
+allowed to finish after a kill so it can remove the object. If cleanup fails,
+the check is `ERROR cleanup_failed`, later cleanup steps still run, and the
+process exits **2**. Generated values always start with `lp_`; search for that
+prefix to find test objects left behind after an interrupted run. Captured and
+generated values are deliberately absent from reports, logs and tickets.
+
 ## Environment gates
 
 `--environment` defaults to `lab`.

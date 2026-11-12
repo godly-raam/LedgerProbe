@@ -10,6 +10,8 @@ maintainer chooses; no Git tags are required.
 
 ### Added
 
+- Disposable fixture rules can create, capture, verify and remove their own test
+  objects, with generated `lp_` names and strict cleanup semantics.
 - Baseline results now distinguish new failures, unchanged failures, explicit
   pass resolutions, and unverified prior failures, and write `unverified` to
   results JSON.
