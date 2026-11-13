@@ -2,9 +2,9 @@
 
 ## Planned, not implemented
 
-None of the items below exist in the current release (`1.1.0`). There is no
-code path, rule, CLI flag, or test for any of them, and none of them changes a
-number in `README.md`, `docs/BENCHMARK.md`, or `docs/VALIDATION.md`. Each would
+None of the items below exist in the current code on `main`. There is no code
+path, rule, CLI flag, or test for any of them, and none of them changes a number
+in `README.md`, `docs/BENCHMARK.md`, or `docs/VALIDATION.md`. Each would
 need its own fixtures and preregistered evaluation before any recorded result
 could cite it.
 
@@ -26,7 +26,7 @@ implemented; the current engine has no event, queue, or signature checks.
 Draft candidate rules from the sanitized traffic inventory only: no response
 content is ever sent to a model, every draft is human-reviewed, and nothing is
 executed until `--accept-generated` is passed. Not implemented; there is no
-model client, prompt, or provider configuration in this release.
+model client, prompt, or provider configuration in the current code.
 
 ### (d) Nullable `anyOf` handling in the OpenAPI parser
 

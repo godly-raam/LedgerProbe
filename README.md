@@ -12,24 +12,27 @@ validation (23 benchmark cases, 19 extension cases).
 
 | Run | Vulnerable detected | False positives | Abstentions | Not run |
 |---|---:|---:|---:|---:|
-| 23-case benchmark (VAmPI, crAPI), first pass, pre-tuning (v1) | 10 of 13 | 0 of 10 safe | 9 | 0 |
-| Same 23 cases, strict status baseline (exact 403) | 12 of 13 | 9 of 10 safe | 2 | 0 |
-| Same 23 cases, lenient status baseline (`{401,403,404}`) | 13 of 13 | 8 of 10 safe | 0 | 0 |
-| Pre-registered extension (VAmPI, crAPI, DVR), first run | 2 of 8 | 2 of 11 safe | 3 | 8 (4 vulnerable, 4 safe) |
-| Same extension, tuned after seeing the first run | 5 of 8 | 0 of 11 safe | 4 | 1 (vulnerable) |
-| Post-headline rule correction (one crAPI rule; separate from the headline) | 6 of 8 | 0 of 11 safe | 4 | 1 (vulnerable) |
+| 23-case benchmark (VAmPI, crAPI), first pass, pre-tuning (v1) | 10 of 13 | 0 of 10 safe cases | 9 | 0 |
+| Same 23 cases, strict status baseline (exact 403) | 12 of 13 | 9 of 10 safe cases | 2 | 0 |
+| Same 23 cases, lenient status baseline (`{401,403,404}`) | 13 of 13 | 8 of 10 safe cases | 0 | 0 |
+| Pre-registered extension (VAmPI, crAPI, DVR), first run | 2 of 8 | 2 of 11 safe cases | 3 | 8 (4 vulnerable, 4 safe) |
+| Same extension, tuned after seeing the first run | 5 of 8 | 0 of 11 safe cases | 4 | 1 (vulnerable) |
+| Post-headline rule correction (one crAPI rule; separate from the headline) | 6 of 8 | 0 of 11 safe cases | 4 | 1 (vulnerable) |
 
-Object-scoped endpoints only (11 cases), where public and shared endpoints
-cannot inflate the comparison:
+Object-scoped endpoints only: the cut is 11 cases (8 vulnerable, 3 safe), and
+no public or shared endpoint can inflate it.
 
-| Object-scoped cases | False positives |
+| Object-scoped cases | False positives (of safe cases) |
 |---|---:|
-| Strict status baseline | 3 of 11 |
-| Lenient status baseline | 1 of 11 |
-| LedgerProbe differential | 0 of 11 |
+| Strict status baseline | 3 of 3 safe cases |
+| Lenient status baseline | 1 of 3 safe cases |
+| LedgerProbe differential | 0 of 3 safe cases |
+
+Small sample: that cut has three safe cases, so these rows are an example, not a
+rate.
 
 Same author, small N; first-run rows are pre-tuning, tuned rows came after seeing
-them (v1 was also 0 of 11 false positives on the object-scoped cut). Sources:
+them (v1 was also 0 of 3 safe cases in that cut). Sources:
 [docs/BENCHMARK.md](docs/BENCHMARK.md), [docs/VALIDATION.md](docs/VALIDATION.md).
 
 ## Results first
@@ -174,7 +177,7 @@ Race synchronization supports `burst`, HTTP/1.1 `last_byte`, and an optional `h2
 
 | Integration | How it was tested |
 | --- | --- |
-| SARIF 2.1.0 | Reporter tests, including fingerprints, rule metadata, and official-schema validation when the schema is available. |
+| SARIF | Reporter tests, including fingerprints, rule metadata, and official-schema validation when the schema is available. |
 | JUnit XML | Reporter tests for PASS, FAIL, INCONCLUSIVE, ERROR, suppressions, and XML escaping. |
 | DefectDojo export | JSON exporter is schema-tested. **Upload is not implemented.** |
 | Jira / Linear | `MockTransport` tests cover request shapes, plan/apply, deduplication, retries, cooldowns, and flood caps. No live tenant is tested. |
@@ -201,7 +204,7 @@ See [`docs/INTEGRATIONS.md`](docs/INTEGRATIONS.md) for configuration and [`docs/
 - Race results are local fixture measurements; a PASS only means no violation was observed in the tested rounds.
 - Scope declarations (`object`, `caller`, `shared`) are supplied by the rule author and are not independently verified.
 - Host allowlisting and mutation gates are not a network sandbox; scan only systems you are authorized to test.
-- Planned work is listed in [docs/ROADMAP.md](docs/ROADMAP.md); none of it exists in the current release.
+- Planned work is listed in [docs/ROADMAP.md](docs/ROADMAP.md); none of it exists in the current code.
 - `h2_single_packet` remains experimental and untested against a real HTTP/2 server.
 
 ## Repository layout, development, test commands, and license
@@ -224,4 +227,4 @@ python -m pytest benchmark/tests -q
 python tests/corpus_metrics.py
 ```
 
-The corpus gate must remain at zero false positives and zero false negatives. `ledgerprobe --version` reports `1.1.0`. Licensed under the [MIT License](LICENSE).
+The corpus gate must remain at zero false positives and zero false negatives. `ledgerprobe --version` prints the installed package version. Licensed under the [MIT License](LICENSE).
